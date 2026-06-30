@@ -5641,6 +5641,83 @@ class SessionDB:
         self._execute_write(_do)
 
 
+# =============================================================================
+# SessionDB Factory — Phase 4 of ArcadeDB native storage migration
+# =============================================================================
+
+def create_session_db(
+    db_path: Optional[str] = None,
+    read_only: bool = False,
+    force_sqlite: bool = False,
+):
+    """Factory: returns ArcadedbSessionDB or SessionDB (SQLite).
+
+    Decision based on config.yaml database.arcadedb.enabled.
+    If ArcadeDB is enabled but unreachable, falls back to SQLite.
+
+    Args:
+        db_path: path to state.db (SQLite fallback only).
+        read_only: read-only mode (SQLite fallback only).
+        force_sqlite: force SQLite even if ArcadeDB configured.
+
+    Returns:
+        ArcadedbSessionDB or SessionDB instance.
+    """
+    if force_sqlite:
+        return SessionDB(db_path, read_only)
+
+    try:
+        from hermes_cli.config import load_config
+        config = load_config()
+        arcadedb_cfg = config.get("database", {}).get("arcadedb", {})
+
+        if not arcadedb_cfg.get("enabled", False):
+            return SessionDB(db_path, read_only)
+
+        from hermes_cli.arcadedb_lifecycle import ArcadeDBLifecycle
+        lifecycle = ArcadeDBLifecycle.from_config()
+        if not lifecycle.check_docker():
+            import logging
+            logging.warning("Docker not available, falling back to SQLite")
+            return SessionDB(db_path, read_only)
+        if not lifecycle.is_running():
+            if arcadedb_cfg.get("auto_start", True):
+                lifecycle.ensure_started()
+            else:
+                return SessionDB(db_path, read_only)
+
+        from hermes_cli.arcadedb import ArcadeDBConfig, ArcadeDBAdapter
+        from hermes_cli.arcadedb_session import ArcadedbSessionDB
+
+        db_config = ArcadeDBConfig(
+            host=arcadedb_cfg.get("host", "localhost"),
+            port=arcadedb_cfg.get("port", 5432),
+            database=arcadedb_cfg.get("database", "hermes"),
+            user=arcadedb_cfg.get("user", "root"),
+            password=arcadedb_cfg.get("password", ""),
+        )
+        adapter = ArcadeDBAdapter(db_config)
+        adapter.connect()
+
+        embedder = None
+        emb_cfg = config.get("auxiliary", {}).get("embedding", {})
+        if emb_cfg.get("provider"):
+            try:
+                from hermes_cli.embedder import create_embedder
+                embedder = create_embedder(emb_cfg)
+                embedder.initialize()
+            except Exception:
+                import logging
+                logging.debug("Embedder not available, search will use FTS fallback")
+
+        return ArcadedbSessionDB(adapter=adapter, embedder=embedder)
+
+    except Exception as e:
+        import logging
+        logging.warning("ArcadeDB init failed (%s), falling back to SQLite", e)
+        return SessionDB(db_path, read_only)
+
+
 class AsyncSessionDB:
     """Async door onto SessionDB: offloads each call via asyncio.to_thread so a blocking SQLite call never freezes the event loop. Generic forwarder — the audit confirms no method returns a live cursor/generator."""
 
