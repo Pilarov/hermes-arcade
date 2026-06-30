@@ -203,9 +203,8 @@ class ArcadedbSessionDB:
         billing_mode: Optional[str] = None,
     ) -> None:
         self._adapter.execute(
-            "UPDATE Session SET billing_provider = %(p)s, billing_base_url = %(b)s, "
-            "billing_mode = %(m)s WHERE id = %(id)s",
-            {"p": provider, "b": base_url, "m": billing_mode, "id": session_id},
+            f"UPDATE Session SET billing_provider = {_q(provider)}, billing_base_url = {_q(base_url)}, "
+            f"billing_mode = {_q(billing_mode)} WHERE id = {_q(session_id)}"
         )
 
     def update_token_counts(
@@ -265,9 +264,8 @@ class ArcadedbSessionDB:
         git_repo_root: Optional[str] = None,
     ) -> None:
         self._adapter.execute(
-            "UPDATE Session SET cwd = %(cwd)s, git_branch = %(gb)s, "
-            "git_repo_root = %(gr)s WHERE id = %(id)s",
-            {"cwd": cwd, "gb": git_branch, "gr": git_repo_root, "id": session_id},
+            f"UPDATE Session SET cwd = {_q(cwd)}, git_branch = {_q(git_branch)}, "
+            f"git_repo_root = {_q(git_repo_root)} WHERE id = {_q(session_id)}"
         )
 
     def backfill_repo_roots(self, cwd_to_root: Dict[str, str]) -> None:
@@ -288,8 +286,7 @@ class ArcadedbSessionDB:
             return False
         try:
             self._adapter.execute(
-                "UPDATE Session SET title = %(t)s WHERE id = %(id)s",
-                {"t": title, "id": session_id},
+                f"UPDATE Session SET title = {_q(title)} WHERE id = {_q(session_id)}"
             )
             return True
         except ArcadeDBError:
@@ -878,9 +875,9 @@ class ArcadedbSessionDB:
         self, session_id: str, platform_message_id: str,
     ) -> bool:
         rows = self._adapter.query(
-            "SELECT FROM Message WHERE session_id = %(sid)s "
-            "AND platform_message_id = %(pmi)s LIMIT 1",
-            {"sid": session_id, "pmi": platform_message_id},
+            "SELECT FROM Message WHERE session_id = %s "
+            "AND platform_message_id = %s LIMIT 1",
+            (session_id, platform_message_id),
         )
         return len(rows) > 0
 
@@ -1031,16 +1028,14 @@ class ArcadedbSessionDB:
 
         def _do(cur):
             cur.execute(
-                "DELETE FROM CompressionLock WHERE session_id = %(sid)s "
-                "AND expires_at < %(now)s",
-                {"sid": session_id, "now": now_ts},
+                f"DELETE FROM CompressionLock WHERE session_id = {_q(session_id)} "
+                f"AND expires_at < {_n(now_ts)}"
             )
             try:
                 cur.execute(
-                    "INSERT INTO CompressionLock SET "
-                    "session_id = %(sid)s, holder = %(h)s, "
-                    "acquired_at = %(now)s, expires_at = %(exp)s",
-                    {"sid": session_id, "h": holder, "now": now_ts, "exp": expires},
+                    f"INSERT INTO CompressionLock SET "
+                    f"session_id = {_q(session_id)}, holder = {_q(holder)}, "
+                    f"acquired_at = {_n(now_ts)}, expires_at = {_n(expires)}"
                 )
             except ArcadeDBError:
                 return False
@@ -1061,16 +1056,14 @@ class ArcadedbSessionDB:
     ) -> bool:
         expires = _now() + ttl_seconds
         self._adapter.execute(
-            "UPDATE CompressionLock SET expires_at = %(exp)s "
-            "WHERE session_id = %(sid)s AND holder = %(h)s",
-            {"exp": expires, "sid": session_id, "h": holder},
+            f"UPDATE CompressionLock SET expires_at = {_n(expires)} "
+            f"WHERE session_id = {_q(session_id)} AND holder = {_q(holder)}"
         )
         return True
 
     def release_compression_lock(self, session_id: str, holder: str) -> None:
         self._adapter.execute(
-            "DELETE FROM CompressionLock WHERE session_id = %(sid)s AND holder = %(h)s",
-            {"sid": session_id, "h": holder},
+            f"DELETE FROM CompressionLock WHERE session_id = {_q(session_id)} AND holder = {_q(holder)}"
         )
 
     def get_compression_lock_holder(self, session_id: str) -> Optional[str]:
@@ -1089,9 +1082,8 @@ class ArcadedbSessionDB:
         self, session_id: str, cooldown_until: float, error: Optional[str] = None,
     ) -> None:
         self._adapter.execute(
-            "UPDATE Session SET compression_failure_cooldown_until = %(cu)s, "
-            "compression_failure_error = %(err)s WHERE id = %(id)s",
-            {"cu": cooldown_until, "err": error, "id": session_id},
+            f"UPDATE Session SET compression_failure_cooldown_until = {_n(cooldown_until)}, "
+            f"compression_failure_error = {_q(error)} WHERE id = {_q(session_id)}"
         )
 
     def get_compression_failure_cooldown(
@@ -1249,9 +1241,8 @@ class ArcadedbSessionDB:
 
     def request_handoff(self, session_id: str, platform: str) -> bool:
         self._adapter.execute(
-            "UPDATE Session SET handoff_state = 'pending', handoff_platform = %(p)s "
-            "WHERE id = %(id)s",
-            {"p": platform, "id": session_id},
+            f"UPDATE Session SET handoff_state = 'pending', handoff_platform = {_q(platform)} "
+            f"WHERE id = {_q(session_id)}"
         )
         return True
 
@@ -1283,9 +1274,8 @@ class ArcadedbSessionDB:
 
     def fail_handoff(self, session_id: str, error: str) -> None:
         self._adapter.execute(
-            "UPDATE Session SET handoff_state = 'failed', handoff_error = %(e)s "
-            "WHERE id = %(id)s",
-            {"e": error, "id": session_id},
+            f"UPDATE Session SET handoff_state = 'failed', handoff_error = {_q(error)} "
+            f"WHERE id = {_q(session_id)}"
         )
 
     # ==================================================================
@@ -1339,21 +1329,19 @@ class ArcadedbSessionDB:
     ) -> None:
         now_ts = _now()
         self._adapter.execute(
-            "INSERT INTO TelegramTopicBinding SET "
-            "chat_id = %(cid)s, thread_id = %(tid)s, user_id = %(uid)s, "
-            "session_key = %(sk)s, session_id = %(sid)s, "
-            "managed_mode = 'auto', linked_at = %(now)s, updated_at = %(now)s",
-            {"cid": chat_id, "tid": thread_id, "uid": user_id,
-             "sk": session_key, "sid": session_id, "now": now_ts},
+            f"INSERT INTO TelegramTopicBinding SET "
+            f"chat_id = {_q(chat_id)}, thread_id = {_q(thread_id)}, user_id = {_q(user_id)}, "
+            f"session_key = {_q(session_key)}, session_id = {_q(session_id)}, "
+            f"managed_mode = 'auto', linked_at = {_n(now_ts)}, updated_at = {_n(now_ts)}"
         )
 
     def get_telegram_topic_binding(
         self, *, chat_id: str, thread_id: str,
     ) -> Optional[Dict[str, Any]]:
         rows = self._adapter.query(
-            "SELECT FROM TelegramTopicBinding WHERE chat_id = %(cid)s "
-            "AND thread_id = %(tid)s",
-            {"cid": chat_id, "tid": thread_id},
+            "SELECT FROM TelegramTopicBinding WHERE chat_id = %s "
+            "AND thread_id = %s",
+            (chat_id, thread_id),
         )
         return rows[0] if rows else None
 
@@ -1376,9 +1364,8 @@ class ArcadedbSessionDB:
         self, *, chat_id: str, thread_id: str,
     ) -> int:
         self._adapter.execute(
-            "DELETE VERTEX TelegramTopicBinding WHERE chat_id = %(cid)s "
-            "AND thread_id = %(tid)s",
-            {"cid": chat_id, "tid": thread_id},
+            f"DELETE VERTEX TelegramTopicBinding WHERE chat_id = {_q(chat_id)} "
+            f"AND thread_id = {_q(thread_id)}"
         )
         remaining = self._adapter.query(
             "SELECT count(*) as cnt FROM TelegramTopicBinding WHERE chat_id = %s",
