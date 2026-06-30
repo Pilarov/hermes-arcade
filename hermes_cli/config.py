@@ -3038,6 +3038,37 @@ DEFAULT_CONFIG = {
         "disable_gpu": "auto",
     },
 
+    # ArcadeDB — multi-model database (graph, vector, full-text, document)
+    # replacing SQLite as the primary storage backend.
+    "database": {
+        "arcadedb": {
+            # Enable ArcadeDB as primary storage. Default False — SQLite is
+            # still the default backend for backward compatibility.
+            "enabled": False,
+            # Auto-start the ArcadeDB Docker container when Hermes starts.
+            # Set to False if ArcadeDB is managed externally (systemd, k8s).
+            "auto_start": True,
+            # Connection settings for PostgreSQL wire protocol (port 5432).
+            "host": "localhost",
+            "port": 5432,
+            # HTTP API + Studio (optional). Used only for health checks
+            # and manual administration via ArcadeDB Studio.
+            "http_port": 2480,
+            "database": "hermes",
+            "user": "root",
+            # Empty password = auto-generate a 32-char hex on first start
+            # and persist it back into this config file.
+            "password": "",
+            # Docker image to pull. Pin to a specific version for stability.
+            "docker_image": "arcadedb/arcadedb:26.7.1",
+            # Java heap size for the ArcadeDB JVM.
+            "memory_limit": "4g",
+            # Persistent data directory. Empty = ~/.hermes/arcadedb/data.
+            "data_dir": "",
+            # Connection / query timeout in seconds.
+            "timeout": 30.0,
+        },
+    },
 
     # Config schema version - bump this when adding new required fields
     "_config_version": 32,

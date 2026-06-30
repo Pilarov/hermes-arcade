@@ -13,11 +13,10 @@ Hermetic-test invariants enforced here (see AGENTS.md for rationale):
 3. **Deterministic runtime.** TZ=UTC, LANG=C.UTF-8, PYTHONHASHSEED=0.
 4. **No HERMES_SESSION_* inheritance** — the agent's current gateway
    session must not leak into tests.
-
-These invariants make the local test run match CI closely. Gaps that
-remain (CPU count, xdist worker count) are addressed by the canonical
-test runner at ``scripts/run_tests.sh``.
 """
+
+# ArcadeDB test fixtures (Phase 1 of ArcadeDB native storage migration)
+pytest_plugins = ["tests.fixtures.arcadedb_fixtures"]
 
 import asyncio
 import os

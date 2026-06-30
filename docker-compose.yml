@@ -27,12 +27,31 @@
 #     this on an internet-facing host.
 #
 services:
+  arcadedb:
+    image: arcadedb/arcadedb:26.7.1
+    container_name: hermes-arcadedb
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ~/.hermes/arcadedb/data:/storage
+    environment:
+      - ARCADEDB_ROOT_PASSWORD=${ARCADEDB_PASSWORD:-hermes123}
+      - JAVA_OPTS=-Xmx4g -Xms256m
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2480/api/v1/server"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   gateway:
     build: .
     image: hermes-agent
     container_name: hermes
     restart: unless-stopped
     network_mode: host
+    depends_on:
+      - arcadedb
     volumes:
       - ~/.hermes:/opt/data
     environment:

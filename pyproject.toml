@@ -121,6 +121,12 @@ dependencies = [
   # install rather than gating it behind an extra + a mid-session lazy install
   # (which deadlocked the CLI under prompt_toolkit — see #40490).
   "Pillow==12.2.0",
+  # ArcadeDB — PostgreSQL wire protocol driver.  Replaces SQLite as the
+  # primary session/kanban/memory storage backend when database.arcadedb.enabled
+  # is True.  Uses psycopg[binary] (includes libpq) — no system PostgreSQL
+  # installation required.
+  "psycopg[binary]>=3.1,<4",
+  "psycopg-pool>=3.3,<4",
   # Windows log rotation. Stdlib ``RotatingFileHandler.doRollover()`` uses
   # ``os.rename()`` which fails with ``PermissionError [WinError 32]`` on
   # Windows whenever any other process holds an append-mode handle on

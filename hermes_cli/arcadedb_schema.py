@@ -108,6 +108,16 @@ VERTICES: Dict[str, Dict[str, Any]] = {
             ("api_call_count", "INTEGER", "DEFAULT 0"),
             ("rewind_count", "INTEGER", "DEFAULT 0"),
             ("archived", "INTEGER", "DEFAULT 0"),
+            # Phase 3: compression / billing / handoff fields (mirrors state.db)
+            ("compression_failure_cooldown_until", "DOUBLE"),
+            ("compression_failure_error", "STRING"),
+            ("handoff_state", "STRING"),
+            ("handoff_platform", "STRING"),
+            ("handoff_error", "STRING"),
+            ("parent_session_id", "STRING"),
+            ("billing_provider", "STRING"),
+            ("billing_base_url", "STRING"),
+            ("billing_mode", "STRING"),
         ],
         "indexes": [
             ("source", "NOTUNIQUE"),
@@ -134,12 +144,27 @@ VERTICES: Dict[str, Dict[str, Any]] = {
             ("compacted", "INTEGER", "DEFAULT 0"),
             ("embedding", f"LIST(EXTERNAL true)"),
             ("entity_names", "LIST"),
+            # Phase 3: session_id for direct lookup (enables index scans
+            # without traversing HAS_MESSAGE edges).
+            ("session_id", "STRING"),
+            # Phase 3: structured codex/reasoning fields (mirrors state.db columns)
+            ("reasoning_details", "STRING"),
+            ("codex_reasoning_items", "STRING"),
+            ("codex_message_items", "STRING"),
         ],
         "indexes": [
             ("role", "NOTUNIQUE"),
             ("timestamp", "NOTUNIQUE"),
             ("embedding", "LSM_VECTOR",
              f"dimensions:{_VECTOR_DIM},similarity:'COSINE',quantization:'INT8'"),
+            # Phase 3: direct lookup by session_id + timestamp (replaces idx_messages_session)
+            (("session_id", "timestamp"), "NOTUNIQUE"),
+            (("session_id", "active", "timestamp"), "NOTUNIQUE"),
+            # Phase 3: full-text search (replaces FTS5 virtual table)
+            ("content", "FULL_TEXT"),
+            # Phase 3: platform message id dedup
+            (("session_id", "platform_message_id"), "NOTUNIQUE",
+             "METADATA { ignoreNullValues: true }"),
         ],
     },
     "Task": {
@@ -245,6 +270,8 @@ VERTICES: Dict[str, Dict[str, Any]] = {
             ("trust_score", "NOTUNIQUE"),
             ("embedding", "LSM_VECTOR",
              f"dimensions:{_VECTOR_DIM},similarity:'COSINE',quantization:'INT8'"),
+            # Phase 3: full-text search (replaces FTS5 facts_fts virtual table)
+            ("content", "FULL_TEXT"),
         ],
     },
     "Profile": {
@@ -295,6 +322,61 @@ VERTICES: Dict[str, Dict[str, Any]] = {
              f"dimensions:{_VECTOR_DIM},similarity:'COSINE',quantization:'INT8'"),
             ("created_at", "NOTUNIQUE"),
             ("profile", "NOTUNIQUE"),
+        ],
+    },
+    # Phase 3: ArcadedbSessionDB additional vertex types
+    "CompressionLock": {
+        "props": [
+            ("session_id", "STRING"),
+            ("holder", "STRING"),
+            ("acquired_at", "DOUBLE"),
+            ("expires_at", "DOUBLE"),
+        ],
+        "indexes": [
+            (("session_id",), "UNIQUE"),
+            (("expires_at",), "NOTUNIQUE"),
+        ],
+    },
+    "StateMeta": {
+        "props": [
+            ("key", "STRING"),
+            ("value", "STRING"),
+        ],
+        "indexes": [
+            (("key",), "UNIQUE"),
+        ],
+    },
+    "TelegramTopicMode": {
+        "props": [
+            ("chat_id", "STRING"),
+            ("user_id", "STRING"),
+            ("enabled", "INTEGER", "DEFAULT 1"),
+            ("activated_at", "DOUBLE"),
+            ("updated_at", "DOUBLE"),
+            ("has_topics_enabled", "INTEGER"),
+            ("allows_users_to_create_topics", "INTEGER"),
+            ("capability_checked_at", "DOUBLE"),
+            ("intro_message_id", "STRING"),
+            ("pinned_message_id", "STRING"),
+        ],
+        "indexes": [
+            (("chat_id",), "UNIQUE"),
+        ],
+    },
+    "TelegramTopicBinding": {
+        "props": [
+            ("chat_id", "STRING"),
+            ("thread_id", "STRING"),
+            ("user_id", "STRING"),
+            ("session_key", "STRING"),
+            ("session_id", "STRING"),
+            ("managed_mode", "STRING", "DEFAULT 'auto'"),
+            ("linked_at", "DOUBLE"),
+            ("updated_at", "DOUBLE"),
+        ],
+        "indexes": [
+            (("chat_id", "thread_id"), "UNIQUE"),
+            (("session_id",), "NOTUNIQUE"),
         ],
     },
 }
