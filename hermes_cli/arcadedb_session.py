@@ -38,6 +38,8 @@ from hermes_cli.arcadedb_helpers import (
     _format_timestamp,
     _has_cjk,
     _rid_to_int,
+    _q,
+    _n,
     MAX_TITLE_LENGTH,
 )
 
@@ -84,8 +86,10 @@ class ArcadedbSessionDB:
                 props[k] = v
 
         def _do(cur):
-            cols = ", ".join(f"`{k}` = %({k})s" for k in props)
-            cur.execute(f"INSERT INTO Session SET {cols}", props)
+            parts = ", ".join(
+                f"`{k}` = {_q(v)}" for k, v in props.items()
+            )
+            cur.execute(f"INSERT INTO Session SET {parts}")
         self._adapter.transact(_do)
         return session_id
 
@@ -514,28 +518,20 @@ class ArcadedbSessionDB:
         num_tc = len(tool_calls) if tool_calls else 0
 
         def _do(cur):
-            cur.execute(
+            # ArcadeDB PG protocol limits bind parameters — use string formatting
+            sql = (
                 "CREATE VERTEX Message SET "
-                "session_id = %s, role = %s, content = %s, "
-                "timestamp = %s, token_count = %s, finish_reason = %s, "
-                "reasoning = %s, reasoning_content = %s, "
-                "reasoning_details = %s, codex_reasoning_items = %s, "
-                "codex_message_items = %s, tool_calls = %s, "
-                "tool_call_id = %s, tool_name = %s, "
-                "platform_message_id = %s, observed = %s, "
-                "active = 1, compacted = 0",
-                (
-                    session_id, role, content_encoded,
-                    ts, token_count, finish_reason,
-                    reasoning, reasoning_content,
-                    reasoning_details_json, codex_reasoning_json,
-                    codex_message_json, tool_calls_json,
-                    tool_call_id, tool_name,
-                    platform_message_id, int(observed),
-                ),
+                f"session_id = {_q(session_id)}, role = {_q(role)}, content = {_q(content_encoded)}, "
+                f"timestamp = {_n(ts)}, token_count = {_n(token_count)}, finish_reason = {_q(finish_reason)}, "
+                f"reasoning = {_q(reasoning)}, reasoning_content = {_q(reasoning_content)}, "
+                f"reasoning_details = {_q(reasoning_details_json)}, codex_reasoning_items = {_q(codex_reasoning_json)}, "
+                f"codex_message_items = {_q(codex_message_json)}, tool_calls = {_q(tool_calls_json)}, "
+                f"tool_call_id = {_q(tool_call_id)}, tool_name = {_q(tool_name)}, "
+                f"platform_message_id = {_q(platform_message_id)}, observed = {int(observed)}, "
+                "active = 1, compacted = 0"
             )
+            cur.execute(sql)
 
-            # Get the created @rid
             cur.execute(
                 "SELECT @rid FROM Message WHERE session_id = %s "
                 "AND timestamp = %s AND role = %s "
@@ -548,16 +544,12 @@ class ArcadedbSessionDB:
             msg_rid = msg["@rid"]
 
             # Create HAS_MESSAGE edge
+            _tks = len(content.split()) if isinstance(content, str) else 0
             cur.execute(
-                "CREATE EDGE HAS_MESSAGE FROM "
-                "(SELECT FROM Session WHERE id = %s) TO "
-                "(SELECT FROM Message WHERE @rid = %s) "
-                "SET seq = 0, role = %s, tokens = %s, created_at = %s",
-                (
-                    session_id, msg_rid, role,
-                    len(content.split()) if isinstance(content, str) else 0,
-                    ts,
-                ),
+                f"CREATE EDGE HAS_MESSAGE FROM "
+                f"(SELECT FROM Session WHERE id = {_q(session_id)}) TO "
+                f"(SELECT FROM Message WHERE @rid = {_q(msg_rid)}) "
+                f"SET seq = 0, role = {_q(role)}, tokens = {_tks}, created_at = {_n(ts)}"
             )
 
             # Update session counters

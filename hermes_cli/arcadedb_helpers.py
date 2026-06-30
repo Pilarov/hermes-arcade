@@ -128,3 +128,28 @@ def _rid_to_int(rid: str) -> int:
     Used for backward compatibility with SessionDB message IDs (AUTOINCREMENT).
     """
     return hash(rid) & 0x7FFFFFFF
+
+
+def _q(val) -> str:
+    """Quote a Python value as an ArcadeDB SQL literal.
+
+    Returns 'NULL' for None, quoted string for str, or bare value otherwise.
+    Used to inline values in SQL (ArcadeDB PG protocol bind-param limit).
+    """
+    if val is None:
+        return "NULL"
+    if isinstance(val, str):
+        escaped = val.replace("\\", "\\\\").replace("'", "\\'")
+        return f"'{escaped}'"
+    if isinstance(val, (int, float)):
+        return str(val)
+    return f"'{val}'"
+
+
+def _n(val) -> str:
+    """Format a numeric value or NULL for SQL literal."""
+    if val is None:
+        return "NULL"
+    if isinstance(val, float):
+        return repr(val)
+    return str(val)
