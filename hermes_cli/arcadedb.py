@@ -174,17 +174,19 @@ class ArcadeDBAdapter:
             raise ArcadeDBError("not connected")
 
         conn = self._pool.getconn()
-        conn.autocommit = False
         cur = conn.cursor()
         try:
+            cur.execute("BEGIN")
             result = fn(cur)
-            conn.commit()
+            cur.execute("COMMIT")
             return result
         except Exception:
-            conn.rollback()
+            try:
+                cur.execute("ROLLBACK")
+            except Exception:
+                pass
             raise
         finally:
-            conn.autocommit = True
             cur.close()
             self._pool.putconn(conn)
     # ------------------------------------------------------------------
