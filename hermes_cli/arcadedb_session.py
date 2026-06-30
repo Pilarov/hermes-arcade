@@ -516,31 +516,31 @@ class ArcadedbSessionDB:
         def _do(cur):
             cur.execute(
                 "CREATE VERTEX Message SET "
-                "session_id = %(sid)s, role = %(r)s, content = %(c)s, "
-                "timestamp = %(ts)s, token_count = %(tk)s, finish_reason = %(fr)s, "
-                "reasoning = %(rs)s, reasoning_content = %(rc)s, "
-                "reasoning_details = %(rd)s, codex_reasoning_items = %(cri)s, "
-                "codex_message_items = %(cmi)s, tool_calls = %(tc)s, "
-                "tool_call_id = %(tci)s, tool_name = %(tn)s, "
-                "platform_message_id = %(pmi)s, observed = %(ob)s, "
+                "session_id = %s, role = %s, content = %s, "
+                "timestamp = %s, token_count = %s, finish_reason = %s, "
+                "reasoning = %s, reasoning_content = %s, "
+                "reasoning_details = %s, codex_reasoning_items = %s, "
+                "codex_message_items = %s, tool_calls = %s, "
+                "tool_call_id = %s, tool_name = %s, "
+                "platform_message_id = %s, observed = %s, "
                 "active = 1, compacted = 0",
-                {
-                    "sid": session_id, "r": role, "c": content_encoded,
-                    "ts": ts, "tk": token_count, "fr": finish_reason,
-                    "rs": reasoning, "rc": reasoning_content,
-                    "rd": reasoning_details_json, "cri": codex_reasoning_json,
-                    "cmi": codex_message_json, "tc": tool_calls_json,
-                    "tci": tool_call_id, "tn": tool_name,
-                    "pmi": platform_message_id, "ob": int(observed),
-                },
+                (
+                    session_id, role, content_encoded,
+                    ts, token_count, finish_reason,
+                    reasoning, reasoning_content,
+                    reasoning_details_json, codex_reasoning_json,
+                    codex_message_json, tool_calls_json,
+                    tool_call_id, tool_name,
+                    platform_message_id, int(observed),
+                ),
             )
 
             # Get the created @rid
             cur.execute(
-                "SELECT @rid FROM Message WHERE session_id = %(sid)s "
-                "AND timestamp = %(ts)s AND role = %(r)s "
+                "SELECT @rid FROM Message WHERE session_id = %s "
+                "AND timestamp = %s AND role = %s "
                 "ORDER BY @rid DESC LIMIT 1",
-                {"sid": session_id, "ts": ts, "r": role},
+                (session_id, ts, role),
             )
             msg = cur.fetchone()
             if not msg:
@@ -550,26 +550,26 @@ class ArcadedbSessionDB:
             # Create HAS_MESSAGE edge
             cur.execute(
                 "CREATE EDGE HAS_MESSAGE FROM "
-                "(SELECT FROM Session WHERE id = %(sid)s) TO "
-                "(SELECT FROM Message WHERE @rid = %(rid)s) "
-                "SET seq = 0, role = %(r)s, tokens = %(tks)s, created_at = %(ts)s",
-                {
-                    "sid": session_id, "rid": msg_rid, "r": role,
-                    "tks": len(content.split()) if isinstance(content, str) else 0,
-                    "ts": ts,
-                },
+                "(SELECT FROM Session WHERE id = %s) TO "
+                "(SELECT FROM Message WHERE @rid = %s) "
+                "SET seq = 0, role = %s, tokens = %s, created_at = %s",
+                (
+                    session_id, msg_rid, role,
+                    len(content.split()) if isinstance(content, str) else 0,
+                    ts,
+                ),
             )
 
             # Update session counters
             cur.execute(
-                "UPDATE Session SET message_count = message_count + 1 WHERE id = %(sid)s",
-                {"sid": session_id},
+                "UPDATE Session SET message_count = message_count + 1 WHERE id = %s",
+                (session_id,),
             )
             if tool_name:
                 cur.execute(
-                    "UPDATE Session SET tool_call_count = tool_call_count + %(n)s "
-                    "WHERE id = %(sid)s",
-                    {"n": num_tc, "sid": session_id},
+                    "UPDATE Session SET tool_call_count = tool_call_count + %s "
+                    "WHERE id = %s",
+                    (num_tc, session_id),
                 )
 
             return _rid_to_int(msg_rid)
