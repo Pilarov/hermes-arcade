@@ -101,7 +101,7 @@ class ArcadeDBAdapter:
                 timeout=self._cfg.pool_timeout,
                 open=True,
                 kwargs={
-                    "autocommit": False,
+                    "autocommit": True,
                     "row_factory": dict_row,
                     "prepare_threshold": 5,
                 },
@@ -174,6 +174,7 @@ class ArcadeDBAdapter:
             raise ArcadeDBError("not connected")
 
         conn = self._pool.getconn()
+        conn.autocommit = False
         cur = conn.cursor()
         try:
             result = fn(cur)
@@ -183,13 +184,12 @@ class ArcadeDBAdapter:
             conn.rollback()
             raise
         finally:
+            conn.autocommit = True
             cur.close()
             self._pool.putconn(conn)
-
     # ------------------------------------------------------------------
     # Query API
     # ------------------------------------------------------------------
-
     def execute(
         self,
         sql: str,
@@ -223,12 +223,9 @@ class ArcadeDBAdapter:
                 else:
                     rows = [{"rowcount": cur.rowcount}]
             except Exception:
-                rows = []  # DDL returns no result
-
-            conn.commit()
+                rows = []
             return rows
         except Exception as e:
-            conn.rollback()
             raise ArcadeDBError(str(e)) from e
         finally:
             cur.close()
