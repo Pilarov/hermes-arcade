@@ -5,10 +5,12 @@ Session Search Tool - Long-Term Conversation Recall
 Single-shape tool with three calling modes (inferred from args, no explicit
 mode parameter):
 
-  1. DISCOVERY — pass ``query``. Runs FTS5, dedupes hits by session lineage,
-     returns top N sessions each with: snippet, ±5 message window around the
-     match, plus bookend_start (first 3 user+assistant msgs of session) and
-     bookend_end (last 3). Zero LLM cost.
+  1. DISCOVERY — pass ``query``. Attempts hybrid vector+text search via
+     ArcadeDB GraphStore first; falls back to SQLite FTS5 when GraphStore is
+     not configured. Dedupes hits by session lineage, returns top N sessions
+     each with: snippet, ±5 message window around the match, plus
+     bookend_start (first 3 user+assistant msgs of session) and bookend_end
+     (last 3). Zero LLM cost.
 
   2. SCROLL — pass ``session_id`` + ``around_message_id``. Returns a window
      of ±window messages centered on the anchor, no FTS5, no bookends. To
@@ -31,6 +33,7 @@ support.
 
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional, Union
 
 # Sources that are excluded from session browsing/searching by default.
@@ -496,7 +499,197 @@ def _title_match_result(
     return entry
 
 
-def _discover(
+# ---------------------------------------------------------------------------
+# Hybrid vector search via ArcadeDB GraphStore
+# ---------------------------------------------------------------------------
+
+_GRAPH_STORE_CACHE = None  # None=untried, False=unavailable, instance=ready
+
+
+def _get_embed_config() -> dict:
+    """Read embedder provider from Hermes config, with env/fallback."""
+    try:
+        from hermes_cli.config import load_config
+        cfg = load_config()
+        aux = cfg.get("auxiliary", {}) or {}
+        emb = aux.get("embedding", {}) or {}
+        return {
+            "provider": emb.get("provider") or os.environ.get("ARCADE_EMBEDDER", "fastembed"),
+            "model": emb.get("model"),
+            "cache_dir": emb.get("cache_dir"),
+        }
+    except Exception:
+        return {"provider": os.environ.get("ARCADE_EMBEDDER", "fastembed")}
+
+
+def _init_graph_store():
+    """Lazy-init GraphStore from Hermes config. Returns None if unavailable."""
+    global _GRAPH_STORE_CACHE
+    if _GRAPH_STORE_CACHE is not None:
+        return _GRAPH_STORE_CACHE if _GRAPH_STORE_CACHE is not False else None
+    try:
+        from hermes_cli.arcadedb import ArcadeDBAdapter, ArcadeDBConfig
+        from hermes_cli.graph_store import GraphStore
+        from hermes_cli.embedder import create_embedder
+
+        cfg = ArcadeDBConfig(
+            host=os.environ.get("ARCADE_HOST", "localhost"),
+            port=int(os.environ.get("ARCADE_PORT", "2480")),
+            database=os.environ.get("ARCADE_DATABASE", "hermes"),
+            user=os.environ.get("ARCADE_USER", "root"),
+            password=os.environ.get("ARCADE_PASSWORD", "hermes123"),
+        )
+        adapter = ArcadeDBAdapter(cfg)
+        adapter.connect()
+        embedder = create_embedder(_get_embed_config())
+        embedder.initialize()
+        _GRAPH_STORE_CACHE = GraphStore(adapter, embedder)
+        logging.debug("GraphStore initialised for hybrid session search")
+        return _GRAPH_STORE_CACHE
+    except Exception:
+        logging.info("GraphStore not available (falling back to FTS5)")
+        _GRAPH_STORE_CACHE = False
+        return None
+
+
+def _discover_hybrid(
+    graph,
+    fts_db,
+    query: str,
+    limit: int,
+    current_session_id: str = None,
+):
+    """Discovery via GraphStore hybrid vector+text search on SearchMatter.
+
+    Returns a JSON string (same shape as ``_discover_fts5``) or None to
+    signal fallback to the FTS5 path.
+    """
+    current_lineage_root = (
+        _resolve_to_parent(fts_db, current_session_id)
+        if current_session_id else None
+    )
+
+    try:
+        arcade_results = graph.hybrid_search_sessions(query=query, top_k=limit * 3)
+    except Exception as e:
+        logging.warning("hybrid_search_sessions failed: %s", e)
+        return None
+
+    if not arcade_results:
+        return None
+
+    seen = {}
+    results = []
+
+    for sm in arcade_results:
+        if len(seen) >= limit:
+            break
+
+        session_rid = sm.get("session_rid")
+        if not session_rid:
+            continue
+
+        # Resolve session_rid LINK → Session vertex → string id
+        try:
+            sess_rows = graph._db.query(
+                "SELECT id, source, model, title, started_at "
+                "FROM Session WHERE @rid = :rid",
+                params={"rid": str(session_rid)},
+            )
+        except Exception:
+            continue
+        if not sess_rows:
+            continue
+
+        sess = sess_rows[0]
+        session_id = sess.get("id")
+        if not session_id:
+            continue
+
+        # Skip hidden/automation sources
+        if sess.get("source") in _HIDDEN_SESSION_SOURCES:
+            continue
+
+        resolved_sid = _resolve_to_parent(fts_db, session_id)
+        if current_lineage_root and resolved_sid == current_lineage_root:
+            continue
+        if current_session_id and session_id == current_session_id:
+            continue
+        if resolved_sid in seen:
+            continue
+
+        seen[resolved_sid] = {
+            "session_id": session_id,
+            "sess": sess,
+            "sm": sm,
+        }
+
+    for resolved_sid, info in seen.items():
+        session_id = info["session_id"]
+        sess = info["sess"]
+        sm = info["sm"]
+
+        try:
+            msgs = fts_db.get_messages(session_id)
+        except Exception:
+            msgs = []
+
+        if msgs:
+            anchor_id = msgs[0].get("id")
+            try:
+                view = fts_db.get_anchored_view(session_id, anchor_id, window=5, bookend=3)
+            except Exception:
+                view = {}
+            bookend_start = [_shape_message(m) for m in (view.get("bookend_start") or msgs[:3])]
+            window_msgs = [_shape_message(m, anchor_id=anchor_id) for m in (view.get("window") or msgs[:5])]
+            bookend_end = [_shape_message(m) for m in (view.get("bookend_end") or msgs[-3:])]
+            msgs_before = view.get("messages_before", 0)
+            msgs_after = view.get("messages_after", max(len(msgs) - 5, 0))
+        else:
+            anchor_id = None
+            bookend_start = []
+            window_msgs = []
+            bookend_end = []
+            msgs_before = 0
+            msgs_after = 0
+
+        entry = {
+            "session_id": session_id,
+            "when": _format_timestamp(sess.get("started_at")),
+            "source": sess.get("source", "unknown"),
+            "model": sess.get("model") or "unknown",
+            "title": sess.get("title") or sm.get("summary", ""),
+            "matched_role": None,
+            "match_message_id": anchor_id,
+            "snippet": sm.get("summary", ""),
+            "bookend_start": bookend_start,
+            "messages": window_msgs,
+            "bookend_end": bookend_end,
+            "messages_before": msgs_before,
+            "messages_after": msgs_after,
+            "search_method": "hybrid",
+        }
+        keywords = sm.get("keywords", [])
+        if keywords:
+            entry["keywords"] = keywords
+        if resolved_sid and resolved_sid != session_id:
+            entry["parent_session_id"] = resolved_sid
+        results.append(entry)
+
+    if not results:
+        return None
+
+    return json.dumps({
+        "success": True,
+        "mode": "discover",
+        "query": query,
+        "results": results,
+        "count": len(results),
+        "search_method": "hybrid",
+    }, ensure_ascii=False)
+
+
+def _discover_fts5(
     db,
     query: str,
     role_filter: Optional[List[str]],
@@ -614,6 +807,27 @@ def _discover(
         "count": len(results),
         "sessions_searched": len(seen_sessions),
     }, ensure_ascii=False)
+
+
+def _discover(
+    db,
+    query: str,
+    role_filter: Optional[List[str]],
+    limit: int,
+    sort: Optional[str],
+    current_session_id: str = None,
+) -> str:
+    """Discovery shape: hybrid vector search first, FTS5 fallback."""
+    graph = _init_graph_store()
+    if graph is not None:
+        hybrid_result = _discover_hybrid(
+            graph, db, query, limit, current_session_id
+        )
+        if hybrid_result is not None:
+            return hybrid_result
+    return _discover_fts5(
+        db, query, role_filter, limit, sort, current_session_id,
+    )
 
 
 def session_search(
@@ -753,8 +967,9 @@ SESSION_SEARCH_SCHEMA = {
     "name": "session_search",
     "description": (
         "Search past sessions stored in the local session DB, or scroll inside one. "
-        "FTS5-backed retrieval over the SQLite message store. No LLM calls — every "
-        "shape returns actual messages from the DB.\n\n"
+        "Hybrid vector+text retrieval via ArcadeDB GraphStore when configured "
+        "(ARCADE_HOST/ARCADE_PORT env vars); falls back to SQLite FTS5. "
+        "No LLM calls — every shape returns actual messages from the DB.\n\n"
         "SOURCE-FIRST LIMIT\n\n"
         "  This tool searches Hermes conversation history only. It is not evidence "
         "about the current contents of external sources. If the user provided a "
@@ -769,7 +984,8 @@ SESSION_SEARCH_SCHEMA = {
         "FOUR CALLING SHAPES\n\n"
         "  1) DISCOVERY — pass `query`:\n"
         "     session_search(query=\"auth refactor\", limit=3)\n"
-        "     Runs FTS5, dedupes hits by session lineage, returns the top N sessions. "
+        "     Runs hybrid vector+text search (ArcadeDB) or FTS5 (SQLite fallback), "
+        "dedupes hits by session lineage, returns the top N sessions. "
         "Each result carries:\n"
         "       - session_id, title, when, source\n"
         "       - snippet: FTS5-highlighted match excerpt\n"
@@ -802,11 +1018,12 @@ SESSION_SEARCH_SCHEMA = {
         "     session_search()\n"
         "     Returns recent sessions chronologically: titles, previews, timestamps. "
         "Use when the user asks \"what was I working on\" without naming a topic.\n\n"
-        "FTS5 SYNTAX\n\n"
+        "FTS5 SYNTAX (SQLite fallback only)\n\n"
         "  AND is the default — multi-word queries require all terms. Use OR explicitly "
         "for broader recall (`alpha OR beta OR gamma`), quoted phrases for exact match "
         "(`\"docker networking\"`), boolean (`python NOT java`), or prefix wildcards "
-        "(`deploy*`).\n\n"
+        "(`deploy*`). The hybrid ArcadeDB path uses semantic vector search on session "
+        "summaries and does not support boolean syntax.\n\n"
         "WHEN TO USE\n\n"
         "  Reach for this on questions about Hermes conversation history itself, such "
         "as \"what did we do about X\", \"where did we leave Y\", or \"find the "

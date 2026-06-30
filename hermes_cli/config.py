@@ -1634,6 +1634,11 @@ DEFAULT_CONFIG = {
             "timeout": 600,
             "extra_body": {},
         },
+        "embedding": {
+            "provider": "fastembed",
+            "model": "intfloat/multilingual-e5-large",
+            "cache_dir": "",
+        },
     },
     
     "display": {
