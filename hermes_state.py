@@ -5676,15 +5676,11 @@ def create_session_db(
 
         from hermes_cli.arcadedb_lifecycle import ArcadeDBLifecycle
         lifecycle = ArcadeDBLifecycle.from_config()
-        if not lifecycle.check_docker():
-            import logging
-            logging.warning("Docker not available, falling back to SQLite")
+
+        if arcadedb_cfg.get("auto_start", True):
+            lifecycle.ensure_started()
+        elif not lifecycle.is_healthy():
             return SessionDB(db_path, read_only)
-        if not lifecycle.is_running():
-            if arcadedb_cfg.get("auto_start", True):
-                lifecycle.ensure_started()
-            else:
-                return SessionDB(db_path, read_only)
 
         from hermes_cli.arcadedb import ArcadeDBConfig, ArcadeDBAdapter
         from hermes_cli.arcadedb_session import ArcadedbSessionDB
