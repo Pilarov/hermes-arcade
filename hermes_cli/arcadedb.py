@@ -99,13 +99,13 @@ class ArcadeDBAdapter:
                 min_size=self._cfg.pool_min,
                 max_size=self._cfg.pool_max,
                 timeout=self._cfg.pool_timeout,
+                open=True,
                 kwargs={
                     "autocommit": False,
                     "row_factory": dict_row,
                     "prepare_threshold": 5,
                 },
             )
-            self._pool.open()
             self._check_health()
         except (PoolTimeout, psycopg.OperationalError) as e:
             if self._pool is not None:
@@ -217,10 +217,13 @@ class ArcadeDBAdapter:
 
             cur.execute(sql, params)
 
-            if cur.description is not None:
-                rows = [dict(r) for r in cur.fetchall()]
-            else:
-                rows = [{"rowcount": cur.rowcount}]
+            try:
+                if cur.description is not None:
+                    rows = [dict(r) for r in cur.fetchall()]
+                else:
+                    rows = [{"rowcount": cur.rowcount}]
+            except Exception:
+                rows = []  # DDL returns no result
 
             conn.commit()
             return rows
