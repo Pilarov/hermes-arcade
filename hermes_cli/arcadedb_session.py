@@ -691,13 +691,12 @@ class ArcadedbSessionDB:
 
     def replace_messages(self, session_id: str, messages: List[Dict]) -> None:
         def _do(cur):
+            # Soft-delete instead of DELETE VERTEX (avoids edge cascade hang)
             cur.execute(
-                "DELETE VERTEX Message WHERE session_id = %s",
-                (session_id,),
+                f"UPDATE Message SET active = 0 WHERE session_id = {_q(session_id)} AND active = 1"
             )
             cur.execute(
-                "UPDATE Session SET message_count = 0, tool_call_count = 0 WHERE id = %s",
-                (session_id,),
+                f"UPDATE Session SET message_count = 0, tool_call_count = 0 WHERE id = {_q(session_id)}"
             )
             new_msg_count = 0
             new_tc_count = 0
@@ -710,28 +709,23 @@ class ArcadedbSessionDB:
                 num_tc = len(tool_calls) if tool_calls else 0
 
                 cur.execute(
-                    "CREATE VERTEX Message SET session_id = %(sid)s, role = %(r)s, "
-                    "content = %(c)s, timestamp = %(ts)s, tool_calls = %(tc)s, "
-                    "tool_call_id = %(tci)s, tool_name = %(tn)s, "
-                    "finish_reason = %(fr)s, reasoning = %(rs)s, "
-                    "reasoning_content = %(rc)s, active = 1",
-                    {
-                        "sid": session_id, "r": role, "c": content,
-                        "ts": ts, "tc": tc_json,
-                        "tci": msg.get("tool_call_id"),
-                        "tn": msg.get("tool_name"),
-                        "fr": msg.get("finish_reason"),
-                        "rs": msg.get("reasoning"),
-                        "rc": msg.get("reasoning_content"),
-                    },
+                    f"CREATE VERTEX Message SET "
+                    f"session_id = {_q(session_id)}, role = {_q(role)}, "
+                    f"content = {_q(content)}, timestamp = {_n(ts)}, "
+                    f"tool_calls = {_q(tc_json)}, "
+                    f"tool_call_id = {_q(msg.get('tool_call_id'))}, "
+                    f"tool_name = {_q(msg.get('tool_name'))}, "
+                    f"finish_reason = {_q(msg.get('finish_reason'))}, "
+                    f"reasoning = {_q(msg.get('reasoning'))}, "
+                    f"reasoning_content = {_q(msg.get('reasoning_content'))}, "
+                    "active = 1"
                 )
                 new_msg_count += 1
                 new_tc_count += num_tc
 
             cur.execute(
-                "UPDATE Session SET message_count = %(mc)s, tool_call_count = %(tc)s "
-                "WHERE id = %(id)s",
-                {"mc": new_msg_count, "tc": new_tc_count, "id": session_id},
+                f"UPDATE Session SET message_count = {new_msg_count}, "
+                f"tool_call_count = {new_tc_count} WHERE id = {_q(session_id)}"
             )
         self._adapter.transact(_do)
 
