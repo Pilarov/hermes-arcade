@@ -144,16 +144,17 @@ class ArcadeDBAdapter:
             cur.execute("BEGIN")
             result = fn(cur)
             cur.execute("COMMIT")
+            cur.close()
+            self._pool.putconn(conn)
             return result
         except Exception:
             try:
                 cur.execute("ROLLBACK")
             except Exception:
                 pass
-            raise
-        finally:
             cur.close()
-            self._pool.putconn(conn)
+            conn.close()  # discard bad connection
+            raise
 
     # ------------------------------------------------------------------
     # Query API
