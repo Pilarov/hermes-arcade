@@ -46,39 +46,39 @@ class TestTransaction:
     @pytest.fixture(autouse=True)
     def _setup(self, arcadedb_adapter):
         arcadedb_adapter.execute("CREATE VERTEX TYPE TestTx IF NOT EXISTS")
-        # Clean up from previous runs
-        try: arcadedb_adapter.execute("DELETE VERTEX TestTx")
-        except: pass
 
     def test_commit(self, arcadedb_adapter):
+        uid = f"tx-{id(self)}"
         def _do(cur):
-            cur.execute(f"CREATE VERTEX TestTx SET name = {_q('tx-test-1')}")
+            cur.execute(f"CREATE VERTEX TestTx SET name = {_q(uid)}")
         arcadedb_adapter.transact(_do)
         rows = arcadedb_adapter.query(
-            f"SELECT FROM TestTx WHERE name = {_q('tx-test-1')}"
+            f"SELECT FROM TestTx WHERE name = {_q(uid)}"
         )
         assert len(rows) == 1
 
     def test_rollback(self, arcadedb_adapter):
+        uid = f"rb-{id(self)}"
         try:
             def _do(cur):
-                cur.execute(f"CREATE VERTEX TestTx SET name = {_q('rollback-me')}")
+                cur.execute(f"CREATE VERTEX TestTx SET name = {_q(uid)}")
                 raise RuntimeError("simulated failure")
             arcadedb_adapter.transact(_do)
         except RuntimeError:
             pass
         rows = arcadedb_adapter.query(
-            f"SELECT FROM TestTx WHERE name = {_q('rollback-me')}"
+            f"SELECT FROM TestTx WHERE name = {_q(uid)}"
         )
         assert len(rows) == 0
 
     def test_transact_atomic(self, arcadedb_adapter):
+        u1, u2 = f"at1-{id(self)}", f"at2-{id(self)}"
         def _do(cur):
-            cur.execute(f"CREATE VERTEX TestTx SET name = {_q('atom-1')}")
-            cur.execute(f"CREATE VERTEX TestTx SET name = {_q('atom-2')}")
+            cur.execute(f"CREATE VERTEX TestTx SET name = {_q(u1)}")
+            cur.execute(f"CREATE VERTEX TestTx SET name = {_q(u2)}")
         arcadedb_adapter.transact(_do)
         rows = arcadedb_adapter.query(
-            f"SELECT FROM TestTx WHERE name LIKE {_q('atom-%')}"
+            f"SELECT FROM TestTx WHERE name IN ({_q(u1)}, {_q(u2)})"
         )
         assert len(rows) == 2
 
@@ -124,8 +124,13 @@ class TestVectorHandling:
     def _setup(self, arcadedb_adapter):
         arcadedb_adapter.execute("CREATE VERTEX TYPE TestV IF NOT EXISTS")
         arcadedb_adapter.execute("CREATE PROPERTY TestV.embedding IF NOT EXISTS LIST")
-        try: arcadedb_adapter.execute("DELETE VERTEX TestV")
-        except: pass
+        try:
+            arcadedb_adapter.execute(
+                "CREATE INDEX IF NOT EXISTS ON TestV (embedding) LSM_VECTOR "
+                "METADATA { dimensions:4, similarity:'COSINE' }"
+            )
+        except Exception:
+            pass
 
     def test_vector_sql_literal(self, arcadedb_adapter):
         vec = [0.1, 0.2, 0.3, 0.4]
