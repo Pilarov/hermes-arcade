@@ -525,14 +525,21 @@ class ArcadedbSessionDB:
                 f"codex_message_items = {_q(codex_message_json)}, tool_calls = {_q(tool_calls_json)}, "
                 f"tool_call_id = {_q(tool_call_id)}, tool_name = {_q(tool_name)}, "
                 f"platform_message_id = {_q(platform_message_id)}, observed = {int(observed)}, "
-                "active = 1, compacted = 0 "
-                "RETURN @rid"
+                "active = 1, compacted = 0"
             )
             cur.execute(sql)
-            msg_row = cur.fetchone()
-            if not msg_row:
-                raise RuntimeError("Failed to create Message vertex")
-            msg_rid = msg_row["@rid"]
+
+            # ArcadeDB rounds timestamps — find by session_id + role + time window
+            cur.execute(
+                "SELECT @rid FROM Message WHERE session_id = %s "
+                "AND role = %s "
+                "ORDER BY @rid DESC LIMIT 1",
+                (session_id, role),
+            )
+            msg = cur.fetchone()
+            if not msg:
+                raise RuntimeError("Failed to retrieve inserted Message")
+            msg_rid = msg["@rid"]
 
             # Create HAS_MESSAGE edge
             _tks = len(content.split()) if isinstance(content, str) else 0
