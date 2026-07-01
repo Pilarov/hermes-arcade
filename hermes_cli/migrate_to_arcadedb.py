@@ -79,7 +79,7 @@ class ArcadeDBMigrator:
                 report.migrated_rows += 1
             except Exception as e:
                 report.failed_rows += 1
-                report.errors.append(f"session {row.get('id')}: {e}")
+                report.errors.append(f"session {row['id']}: {e}")
 
         # Messages
         messages = conn.execute(
@@ -99,14 +99,14 @@ class ArcadeDBMigrator:
                     f"role = {_q(row['role'])}, "
                     f"content = {_q(content)}, "
                     f"timestamp = {_n(row['timestamp'])}, "
-                    f"active = {row.get('active', 1)}, "
-                    f"compacted = {row.get('compacted', 0)}"
+                    f"active = {row['active'] if row['active'] is not None else 1}, "
+                    f"compacted = {row['compacted'] if row['compacted'] is not None else 0}"
                 )
                 self._adapter.execute(sql)
                 report.migrated_rows += 1
             except Exception as e:
                 report.failed_rows += 1
-                report.errors.append(f"message {row.get('id')}: {e}")
+                report.errors.append(f"message {row['id']}: {e}")
 
         # Compression locks
         locks = conn.execute("SELECT * FROM compression_locks").fetchall()
