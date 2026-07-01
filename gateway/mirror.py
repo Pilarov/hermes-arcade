@@ -170,8 +170,8 @@ def _append_to_sqlite(session_id: str, message: dict) -> None:
     """Append a message to the SQLite session database."""
     db = None
     try:
-        from hermes_state import SessionDB
-        db = SessionDB()
+        from hermes_state import SessionDB, create_session_db
+        db = create_session_db()
         db.append_message(
             session_id=session_id,
             role=message.get("role", "assistant"),

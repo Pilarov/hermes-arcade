@@ -2172,8 +2172,8 @@ async def get_status(profile: Optional[str] = None):
 
         active_sessions = 0
         try:
-            from hermes_state import SessionDB
-            db = SessionDB()
+            from hermes_state import SessionDB, create_session_db
+            db = create_session_db()
             try:
                 sessions = db.list_sessions_rich(limit=50)
                 now = time.time()

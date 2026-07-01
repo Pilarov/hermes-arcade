@@ -545,8 +545,8 @@ class CLICommandsMixin:
         # Make sure we have a SessionDB handle.
         if not self._session_db:
             try:
-                from hermes_state import SessionDB
-                self._session_db = SessionDB()
+                from hermes_state import SessionDB, create_session_db
+                self._session_db = create_session_db()
             except Exception:
                 pass
         if not self._session_db:

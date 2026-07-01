@@ -539,9 +539,9 @@ class AIAgent:
         if self._session_db is not None:
             return self._session_db
         try:
-            from hermes_state import SessionDB
+            from hermes_state import SessionDB, create_session_db
 
-            self._session_db = SessionDB()
+            self._session_db = create_session_db()
             return self._session_db
         except Exception as exc:
             logger.debug("SessionDB unavailable for recall", exc_info=True)

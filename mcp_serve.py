@@ -71,8 +71,8 @@ def _get_sessions_dir() -> Path:
 def _get_session_db():
     """Get a SessionDB instance for reading message transcripts."""
     try:
-        from hermes_state import SessionDB
-        return SessionDB()
+        from hermes_state import SessionDB, create_session_db
+        return create_session_db()
     except Exception as e:
         logger.debug("SessionDB unavailable: %s", e)
         return None

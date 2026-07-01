@@ -858,8 +858,8 @@ def session_search(
     """
     if db is None:
         try:
-            from hermes_state import SessionDB
-            db = SessionDB()
+            from hermes_state import SessionDB, create_session_db
+            db = create_session_db()
         except Exception:
             logging.debug("SessionDB unavailable for session_search", exc_info=True)
             from hermes_state import format_session_db_unavailable

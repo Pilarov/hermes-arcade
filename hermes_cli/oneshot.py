@@ -239,9 +239,9 @@ def _create_session_db_for_oneshot():
     advertised but every call returns "Session database not available.".
     """
     try:
-        from hermes_state import SessionDB
+        from hermes_state import SessionDB, create_session_db
 
-        return SessionDB()
+        return create_session_db()
     except Exception as exc:
         logging.debug("SQLite session store not available for oneshot mode: %s", exc)
         return None

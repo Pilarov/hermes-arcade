@@ -858,10 +858,10 @@ _start_idle_reaper()
 def _get_db():
     global _db, _db_error
     if _db is None:
-        from hermes_state import SessionDB
+        from hermes_state import SessionDB, create_session_db
 
         try:
-            _db = SessionDB()
+            _db = create_session_db()
             _db_error = None
         except Exception as exc:
             _db_error = str(exc)

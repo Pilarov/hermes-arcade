@@ -2091,8 +2091,8 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
     # and discoverable via session_search (same pattern as gateway/run.py).
     _session_db = None
     try:
-        from hermes_state import SessionDB
-        _session_db = SessionDB()
+        from hermes_state import SessionDB, create_session_db
+        _session_db = create_session_db()
     except Exception as e:
         logger.debug("Job '%s': SQLite session store not available: %s", job.get("id", "?"), e)
 

@@ -3735,8 +3735,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
         self._session_db = None
         self._session_db_unavailable = False
         try:
-            from hermes_state import SessionDB
-            self._session_db = SessionDB()
+            from hermes_state import SessionDB, create_session_db
+            self._session_db = create_session_db()
         except Exception as e:
             # #41386: a failed session store means the transcript is NOT
             # persisted to state.db — the live chat looks healthy but resume
