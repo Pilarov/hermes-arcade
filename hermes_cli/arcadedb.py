@@ -201,7 +201,24 @@ class ArcadeDBAdapter:
                 rows = []
             return rows
         except Exception as e:
-            raise ArcadeDBError(str(e)) from e
+            err = str(e)
+            if "Transaction not active" in err or "got no result" in err:
+                cur.close()
+                try: conn.close()
+                except: pass
+                conn2 = self._pool.getconn()
+                cur2 = conn2.cursor()
+                try:
+                    cur2.execute(sql, params)
+                    try:
+                        rows = [dict(r) for r in cur2.fetchall()] if cur2.description else []
+                    except Exception:
+                        rows = []
+                    return rows
+                finally:
+                    cur2.close()
+                    self._pool.putconn(conn2)
+            raise ArcadeDBError(err) from e
         finally:
             cur.close()
             self._pool.putconn(conn)
