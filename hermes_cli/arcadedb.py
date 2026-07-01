@@ -189,49 +189,75 @@ class ArcadeDBAdapter:
         finally:
             cur.close()
             self._pool.putconn(conn)
-    # ------------------------------------------------------------------
-    # Query API
-    # ------------------------------------------------------------------
-    def execute(
-        self,
-        sql: str,
-        params: Optional[Dict[str, Any]] = None,
-        language: str = "sql",
-    ) -> List[Dict[str, Any]]:
-        """Execute a SQL command in auto-commit mode.
+        # ------------------------------------------------------------------
+        # Query API
+        # ------------------------------------------------------------------
+        def execute(
+            self,
+            sql: str,
+            params = None,
+            language: str = "sql",
+        ) -> List[Dict[str, Any]]:
+            """Execute a SQL command.
 
-        Args:
-            sql: SQL string with psycopg placeholders (%s, %(name)s).
-            params: dict of parameters.
-            language: 'sql', 'cypher', or 'sqlscript'.
+            ArcadeDB supports only "simple" query mode (no extended protocol).
+            Dict params are automatically converted to string formatting.
+            Tuple params (<5) work via psycopg bind.
 
-        Returns:
-            List[dict] — query results, or [{"rowcount": N}] for DML.
-        """
-        if self._pool is None:
-            raise ArcadeDBError("not connected")
+            Args:
+                sql: SQL string.
+                params: dict or tuple of parameters (or None).
+                language: 'sql', 'cypher', or 'sqlscript'.
+            """
+            if self._pool is None:
+                raise ArcadeDBError("not connected")
 
-        conn = self._pool.getconn()
-        cur = conn.cursor()
-        try:
-            if language == "cypher":
-                sql = "{cypher} " + sql
+            if isinstance(params, dict):
+                sql = self._fmt(sql, params)
+                params = None
 
-            cur.execute(sql, params)
-
+            conn = self._pool.getconn()
+            cur = conn.cursor()
             try:
-                if cur.description is not None:
-                    rows = [dict(r) for r in cur.fetchall()]
-                else:
-                    rows = [{"rowcount": cur.rowcount}]
-            except Exception:
-                rows = []
-            return rows
-        except Exception as e:
-            raise ArcadeDBError(str(e)) from e
-        finally:
-            cur.close()
-            self._pool.putconn(conn)
+                if language == "cypher":
+                    sql = "{cypher} " + sql
+
+                cur.execute(sql, params)
+
+                try:
+                    if cur.description is not None:
+                        rows = [dict(r) for r in cur.fetchall()]
+                    else:
+                        rows = [{"rowcount": cur.rowcount}]
+                except Exception:
+                    rows = []
+                return rows
+            except Exception as e:
+                raise ArcadeDBError(str(e)) from e
+            finally:
+                cur.close()
+                self._pool.putconn(conn)
+
+        @staticmethod
+        def _fmt(sql: str, params: dict) -> str:
+            """Convert dict-param SQL to string formatting.
+
+            Replaces %(name)s placeholders with _q()-escaped values
+            from the params dict.
+            """
+            import re
+            def _repl(m):
+                key = m.group(1)
+                val = params.get(key)
+                if val is None:
+                    return "NULL"
+                if isinstance(val, str):
+                    escaped = val.replace("\\", "\\\\").replace("'", "\\'")
+                    return f"'{escaped}'"
+                if isinstance(val, (int, float)):
+                    return str(val)
+                return f"'{val}'"
+            return re.sub(r"%\((\w+)\)s", _repl, sql)
 
     def query(
         self,
