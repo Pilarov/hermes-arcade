@@ -340,7 +340,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=2480, help="ArcadeDB HTTP port (default: 2480)")
     p.add_argument("--database", default="hermes", help="ArcadeDB database name (default: hermes)")
     p.add_argument("--user", default="root", help="ArcadeDB username (default: root)")
-    p.add_argument("--password", default="hermes123", help="ArcadeDB password")
+    p.add_argument("--password", default="", help="ArcadeDB password")
     p.add_argument("--embed", action="store_true", help="Compute embeddings during migration (slow)")
     p.add_argument("--state-only", action="store_true", help="Only migrate state.db")
     p.add_argument("--kanban-only", action="store_true", help="Only migrate kanban.db")

@@ -35,7 +35,7 @@ services:
     volumes:
       - ~/.hermes/arcadedb/data:/storage
     environment:
-      - ARCADEDB_ROOT_PASSWORD=${ARCADEDB_PASSWORD:-hermes123}
+      - ARCADEDB_ROOT_PASSWORD=${ARCADEDB_PASSWORD}
       - JAVA_OPTS=-Xmx4g -Xms256m
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:2480/api/v1/server"]

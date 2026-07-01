@@ -250,7 +250,7 @@ services:
       - "5432:5432"    # PostgreSQL wire protocol (основной)
       - "2480:2480"    # HTTP API + Studio (опционально)
     environment:
-      ARCADEDB_ROOT_PASSWORD: ${ARCADEDB_PASSWORD:-hermes123}
+      ARCADEDB_ROOT_PASSWORD: ${ARCADEDB_PASSWORD}
       JAVA_OPTS: "-Xmx4g -Xms256m"
     volumes:
       - arcadedb_data:/storage

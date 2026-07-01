@@ -537,7 +537,7 @@ def _init_graph_store():
             port=int(os.environ.get("ARCADE_PORT", "2480")),
             database=os.environ.get("ARCADE_DATABASE", "hermes"),
             user=os.environ.get("ARCADE_USER", "root"),
-            password=os.environ.get("ARCADE_PASSWORD", "hermes123"),
+            password=os.environ.get("ARCADE_PASSWORD", ""),
         )
         adapter = ArcadeDBAdapter(cfg)
         adapter.connect()

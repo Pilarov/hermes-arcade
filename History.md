@@ -145,8 +145,7 @@ db = create_session_db()
 
 ## Интеграционный тест: 10/10 на сервере
 
-Сервер: `pilarovds@176.108.249.180`, ArcadeDB 26.7.1-SNAPSHOT в Docker
-Доступ: только через SSH (порты 5432/2480 фильтруются хостингом)
+Сервер: ArcadeDB 26.7.1-SNAPSHOT в Docker (доступ через SSH-туннель)
 
 ```
 $ python int_test.py
