@@ -183,6 +183,9 @@ class ArcadeDBAdapter:
         if isinstance(params, dict):
             sql = self._fmt(sql, params)
             params = None
+        elif isinstance(params, (tuple, list)):
+            sql = self._fmt_tuple(sql, params)
+            params = None
 
         conn = self._pool.getconn()
         cur = conn.cursor()
@@ -218,6 +221,11 @@ class ArcadeDBAdapter:
                         autocommit=True, row_factory=dict_row,
                     )
                     raw_cur = raw_conn.cursor()
+                    # Clear any stale server-side transaction state
+                    try: raw_cur.execute("ROLLBACK")
+                    except: pass
+                    try: raw_cur.execute("COMMIT")
+                    except: pass
                     raw_cur.execute(sql, params)
                     try:
                         rows = [dict(r) for r in raw_cur.fetchall()] if raw_cur.description else []
@@ -271,6 +279,25 @@ class ArcadeDBAdapter:
                 return str(val)
             return f"'{val}'"
         return re.sub(r"%\((\w+)\)s", _repl, sql)
+
+    @staticmethod
+    def _fmt_tuple(sql: str, params: tuple) -> str:
+        """Replace %s placeholders with SQL-escaped values from a tuple."""
+        vals = list(params)
+        def _repl(m):
+            if not vals:
+                return m.group(0)
+            val = vals.pop(0)
+            if val is None:
+                return "NULL"
+            if isinstance(val, str):
+                escaped = val.replace("\\", "\\\\").replace("'", "\\'")
+                return f"'{escaped}'"
+            if isinstance(val, (int, float)):
+                return str(val)
+            return f"'{val}'"
+        # Only replace %s that are bind placeholders (not inside strings)
+        return re.sub(r"(?<!')(?<!%)(?<!\w)%s(?!\w)", _repl, sql)
 
     # ------------------------------------------------------------------
     # Vector workaround (ArcadeDB Jackson float[] bug)
