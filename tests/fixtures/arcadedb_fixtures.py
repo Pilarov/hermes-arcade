@@ -62,9 +62,9 @@ TEST_DOCKER_IMAGE = os.environ.get(
     "ARCADEDB_TEST_IMAGE", "arcadedb/arcadedb:26.7.1"
 )
 TEST_CONTAINER_NAME = "hermes-arcadedb-test"
-TEST_DB = "hermes_test"
-TEST_USER = "root"
-TEST_PASSWORD = "test123"
+TEST_DB = os.environ.get("ARCADEDB_TEST_DB", "hermes")
+TEST_USER = os.environ.get("ARCADEDB_TEST_USER", "root")
+TEST_PASSWORD = os.environ.get("ARCADEDB_TEST_PASSWORD", "")
 TEST_PORT = int(os.environ.get("ARCADEDB_TEST_PORT", "5432"))
 TEST_HOST = os.environ.get("ARCADEDB_TEST_HOST", "localhost")
 
