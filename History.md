@@ -240,6 +240,298 @@ hermes_cli/graph_store.py (не трогали, совместим)
 
 ---
 
+---
+
+## Технический долг (15 пунктов)
+
+### TD-1: Composite index syntax — arcadedb_schema.py
+
+**Файл:** `hermes_cli/arcadedb_schema.py:~530` (метод `_create_index`)
+
+**Проблема:** `_create_index()` генерирует `CREATE INDEX ON Message ((session_id, timestamp)) NOTUNIQUE` —
+ArcadeDB отвергает двойные скобки. Синтаксическая ошибка: `mismatched input '('`.
+
+**Влияние:** `SchemaManager.create_all()` не создаёт составные индексы.
+`Message(session_id, timestamp)` и `Message(session_id, active, timestamp)`
+отсутствуют → get_messages не может использовать index scan.
+
+**Исправление:** в методе `_create_index()` изменить генерацию SQL для случая
+3-tuple `(prop1, prop2, kind)` — убрать лишнюю пару скобок:
+```python
+# Было:  f"CREATE INDEX IF NOT EXISTS ON `{type_name}` (({name1}, {name2})) {kind}"
+# Стало: f"CREATE INDEX IF NOT EXISTS ON `{type_name}` ({name1}, {name2}) {kind}"
+```
+
+**Приоритет:** Medium (функциональность работает без индексов, но медленнее)
+
+---
+
+### TD-2: Pool connections — INTRANS при возврате в пул
+
+**Файл:** `hermes_cli/arcadedb.py:~145` (метод `transact`)
+
+**Проблема:** После `ROLLBACK` в `transact()` соединение остаётся в статусе INTRANS.
+При возврате в пул через `putconn()`, psycopg_pool пытается сделать reset (ROLLBACK)
+и падает с `IndexError: list index out of range`. Соединение становится BAD и
+discard'ится. Каждый failed transact теряет одно соединение из пула.
+
+**Лог (из серверных тестов):**
+```
+WARNING:psycopg.pool:rolling back returned connection: <psycopg.Connection [INTRANS] ...>
+WARNING:psycopg.pool:rollback failed: IndexError: list index out of range.
+WARNING:psycopg.pool:discarding closed connection: <psycopg.Connection [BAD] ...>
+```
+
+**Исправление (варианты):**
+1. После ROLLBACK выполнить пустой `SELECT 1` для сброса статуса
+2. Закрывать и пересоздавать соединение после ошибки (ждёт pool reconnect)
+3. Использовать `conn.close()` вместо `putconn()` для нестабильных соединений
+
+**Приоритет:** Low (pool восстанавливается через создание новых соединений; утечки нет)
+
+---
+
+### TD-3: String formatting — риск SQL-инъекций
+
+**Файлы:** `hermes_cli/arcadedb_helpers.py:_q()`, `hermes_cli/arcadedb.py:_fmt()`
+
+**Проблема:** Поскольку ArcadeDB не поддерживает bind-параметры, все значения
+внедряются в SQL через string formatting. `_q()` экранирует `'` и `\`, но это
+не полноценная защита. Например, `_q("O'Brian")` → `'O\'Brian'` (правильно),
+но `_q("\\\\' OR 1=1 --")` → экранирует не все edge-кейсы.
+
+**Влияние:** Теоретический вектор SQL-инъекции через пользовательский контент
+(названия сессий, содержимое сообщений с `'` и `\`).
+
+**Исправление:**
+1. Добавить `_q()` тесты для экранирования edge-кейсов
+2. Рассмотреть `psycopg.sql.Literal` для безопасного форматирования
+3. При обновлении ArcadeDB до версии с поддержкой extended protocol —
+   вернуться к bind-параметрам
+
+**Приоритет:** Medium (пользовательский контент потенциально непроверенный)
+
+---
+
+### TD-4: SEARCH_INDEX (Lucene FULL_TEXT) не используется
+
+**Файл:** `hermes_cli/arcadedb_session.py:~900` (метод `search_messages`)
+
+**Проблема:** `SEARCH_INDEX('Message[content]', ...)` вызывает зависание
+на 20+ секунд либо синтаксическую ошибку. Причина не выяснена до конца —
+возможно, ArcadeDB 26.7.1-SNAPSHOT имеет баг в Lucene FULL_TEXT реализации.
+FTS5 (SQLite) заменён на простой `LIKE`, что не даёт BM25-ранжирования.
+
+**Влияние:** Поиск сообщений работает через LIKE без relevance scoring.
+Нет BM25, нет snippets, нет phrase search.
+
+**Исправление:** 
+1. Исследовать `SEARCH_INDEX` behaviour на стабильной версии ArcadeDB (не SNAPSHOT)
+2. Добавить Python-side BM25 scoring как fallback
+3. Рассмотреть `LANGUAGE lucene` в SQL для явного указания диалекта
+
+**Приоритет:** Medium (поиск работает, но качество ниже FTS5)
+
+---
+
+### TD-5: GraphStore не обновлён под новый адаптер
+
+**Файл:** `hermes_cli/graph_store.py` (~376 строк)
+
+**Проблема:** `GraphStore` всё ещё использует старый `ArcadeDBAdapter` API
+(HTTP/JSON). Новый psycopg-адаптер предоставляет тот же `execute()`/`query()`
+API, поэтому код работает, но:
+- `GraphStore.add_message()` дублирует `ArcadedbSessionDB.append_message()`
+- `GraphStore.search_messages()` — старый vector поиск, не используется в новом `search_messages()`
+- `GraphStore` не использует `transact()` для атомарности
+
+**Исправление:** 
+1. Убрать дублирующиеся методы (add_message, get_messages уже есть в SessionDB)
+2. Переключить `hybrid_search_sessions` на новый `transact()` API
+3. Синхронизировать `create_search_matter` с новым `append_message`
+
+**Приоритет:** Low (GraphStore методы всё ещё работают через совместимый API)
+
+---
+
+### TD-6: Нет ArcadeDB schema version tracking
+
+**Файл:** `hermes_cli/arcadedb_schema.py`
+
+**Проблема:** SQLite `SessionDB` использует таблицу `schema_version` и метод
+`_init_schema()` для version-gated миграций (добавление колонок, бэкфиллы).
+ArcadeDB схема создаётся через `CREATE ... IF NOT EXISTS` — нет механизма
+отслеживания версий и применения data-миграций.
+
+**Влияние:** При добавлении новых полей в будущем нет автоматического
+бэкфилла существующих записей (как это делает SQLite `_reconcile_columns()`).
+
+**Исправление:** 
+1. Добавить `schema_version` key в `StateMeta` vertex
+2. Реализовать `_migrate_data()` метод в `SchemaManager`
+3. Версионировать миграции: v1 → v2 (добавить поле X → бэкфилл NULL)
+
+**Приоритет:** Low (пока нет новых полей, требующих бэкфилла)
+
+---
+
+### TD-7: Нет retry logic для transient ошибок ArcadeDB
+
+**Файл:** `hermes_cli/arcadedb.py`
+
+**Проблема:** SQLite `SessionDB` использует `_execute_write()` с retry loop
+(до 15 попыток с jitter 20-150ms на `database is locked`). ArcadeDB adapter
+не имеет retry logic — любой transient error (connection reset, pool timeout)
+сразу пробрасывается как `ArcadeDBError`.
+
+**Влияние:** При пиковой нагрузке или перезапуске ArcadeDB возможны
+ложные ошибки в агентском цикле.
+
+**Исправление:** 
+1. Добавить `@retry` декоратор на `transact()` и `execute()` 
+2. Использовать `tenacity` (уже в deps) с экспоненциальным backoff
+3. Retry только на `OperationalError` и `PoolTimeout`
+
+**Приоритет:** Medium (production reliability)
+
+---
+
+### TD-8: 30+ consumers всё ещё создают SessionDB напрямую
+
+**Файлы:** `cli.py`, `run_agent.py`, `gateway/run.py`, `gateway/session.py`, etc.
+
+**Проблема:** Factory `create_session_db()` написана, но ни один consumer
+не переключён на неё. Все 30+ файлов всё ещё делают `SessionDB()` напрямую.
+Фабрика существует, но не используется.
+
+**Влияние:** ArcadeDB не активируется при реальном запуске Hermes —
+только в тестах и интеграционных скриптах.
+
+**Исправление:** См. Phase 4 spec (`docs/arcadedb-migration/phase-4-consumers.md`).
+Заменить `SessionDB()` → `create_session_db()` в 30+ файлах.
+
+**Приоритет:** **CRITICAL** (без этого вся работа не активируется)
+
+---
+
+### TD-9: Нет тестов ArcadeDB → SQLite fallback
+
+**Файл:** `tests/test_arcadedb_session_factory.py`
+
+**Проблема:** Фабрика имеет try/except для graceful fallback на SQLite,
+но тесты проверяют только: SQLite работает, ArcadeDB включается (mock).
+Не протестированы сценарии:
+- ArcadeDB configured but unreachable → fallback
+- ArcadeDB был доступен, стал недоступен mid-session → поведение не определено
+- Docker absent + auto_start=True → сообщение об ошибке
+
+**Исправление:** Добавить тесты с mock'ом `ArcadeDBAdapter.connect()` 
+на выбрасывание исключений.
+
+**Приоритет:** Medium (критично для production-надёжности)
+
+---
+
+### TD-10: `_maybe_epoch()` — потеря микросекунд при парсинге ISO
+
+**Файл:** `hermes_cli/arcadedb_helpers.py:_maybe_epoch()`
+
+**Проблема:** Функция парсит `"2026-06-30 12:00:00"` но не обрабатывает
+ISO-формат с микросекундами `"2026-06-30T12:00:00.123456"` или timezone
+`"2026-06-30T12:00:00+03:00"`. SQLite-бэкенд хранит только float (epoch),
+поэтому проблема не критична для миграции, но при ручном импорте данных
+из внешних источников — потеря точности.
+
+**Исправление:** Добавить поддержку ISO-8601 с timezone и микросекундами.
+
+**Приоритет:** Low (state.db всегда хранит epoch float, миграция не теряет данные)
+
+---
+
+### TD-11: `update_token_counts()` — race condition на инкрементах
+
+**Файл:** `hermes_cli/arcadedb_session.py:~220`
+
+**Проблема:** `UPDATE Session SET input_tokens = input_tokens + %s` —
+ArcadeDB выполняет read-modify-write неатомарно (в отличие от SQLite
+`BEGIN IMMEDIATE`). Два concurrent вызова могут потерять обновления.
+
+**Влияние:** При параллельной работе нескольких агентов (kanban workers,
+delegate subagents) счётчики токенов могут расходиться.
+
+**Исправление:** Обернуть в `transact()` с явным `SELECT ... FOR UPDATE`
+или использовать ArcadeDB atomic increment (если поддерживается).
+
+**Приоритет:** Low (счётчики токенов — некритичная метрика)
+
+---
+
+### TD-12: `rewind_to_message()` — @rid сравнение строковое
+
+**Файл:** `hermes_cli/arcadedb_session.py:~780`
+
+**Проблема:** Метод сравнивает `@rid` как строки через `>=`, что в ArcadeDB
+работает лексикографически (`#39:27` > `#39:3` — ложно, потому что `'2'` < `'3'`?).
+На самом деле `#39:27` > `#39:3` лексикографически верно, но `#39:9` > `#39:10`
+уже нет. Порядок `@rid` не гарантирует хронологию вставки.
+
+**Влияние:** `/rewind` и `/undo` могут захватить неправильный диапазон сообщений.
+
+**Исправление:** Использовать timestamp для определения порядка, не @rid.
+
+**Приоритет:** Medium (пользовательская команда /undo)
+
+---
+
+### TD-13: `hybrid_search_sessions` — entity_names не заполняются
+
+**Файл:** `hermes_cli/arcadedb_session.py:hybrid_search_sessions()` + `SearchMatter` vertex
+
+**Проблема:** `SearchMatter` vertex type имеет поле `entity_names` (LIST),
+но `hybrid_search_sessions()` не извлекает и не сохраняет entity names
+при создании SearchMatter. Это лишает гибридный поиск entity-aware filtering,
+который был в изначальном плане.
+
+**Исправление:** Добавить entity extraction в `create_search_matter()` и
+`append_message()` — извлекать именованные сущности из текста и сохранять
+в `SearchMatter.entity_names`.
+
+**Приоритет:** Low (функциональность не реализована, но и не используется)
+
+---
+
+### TD-14: `_rid_to_int()` — хеш-коллизии возможны
+
+**Файл:** `hermes_cli/arcadedb_helpers.py:_rid_to_int()`
+
+**Проблема:** `hash(rid) & 0x7FFFFFFF` преобразует строковый @rid в 32-bit int
+для обратной совместимости с SQLite `AUTOINCREMENT`. Теоретически возможны коллизии
+при большом количестве сообщений (>2^31). Практически — маловероятно, но
+`get_messages_around()` полагается на уникальность message ID.
+
+**Исправление:** Использовать `id` property (INTEGER SEQUENCE) на Message vertex
+вместо хеша @rid. Требует `CREATE SEQUENCE` в схеме и изменение `append_message()`.
+
+**Приоритет:** Low (коллизия `hash()` на <1M сообщений практически невозможна)
+
+---
+
+### TD-15: `search_messages` — N+1 запросов на сессии
+
+**Файл:** `hermes_cli/arcadedb_session.py:~940` (lookup session metadata)
+
+**Проблема:** После поиска сообщений, для каждого результата делается отдельный
+запрос `SELECT source, model FROM Session WHERE id = ...` для получения метаданных.
+При limit=20 и 0 кэш-попаданиях — 20 дополнительных запросов.
+
+**Исправление:** 
+1. Собрать все `session_id` из результатов, сделать один batch-запрос
+2. Или денормализовать `source` и `model` прямо в Message vertex
+
+**Приоритет:** Low (кэш в Python снижает N+1 до ~2-3 запросов на типичный search)
+
+---
+
 ## Следующие шаги (Phases 5–8)
 
 ### Phase 5: Migration Tool
@@ -259,9 +551,3 @@ hermes_cli/graph_store.py (не трогали, совместим)
 
 ### Phase 8: Other DBs
 - Projects DB, Response Store, Verification Evidence, RetainDB Queue
-
-### Технический долг
-- Composite index syntax fix в `arcadedb_schema.py`
-- Pool connection cleanup (warnings о INTRANS при закрытии)
-- Поиск: добавить SEARCH_INDEX обратно когда заработает
-- Композитные индексы: убрать дополнительные скобки в DDL
