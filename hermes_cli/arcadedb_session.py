@@ -899,46 +899,56 @@ class ArcadedbSessionDB:
 
         if has_cjk:
             rows = self._adapter.query(
-                "SELECT m.@rid as rid, m.session_id, m.role, m.content, "
-                "m.timestamp, m.tool_name, "
-                "s.source, s.model, s.started_at as session_started "
-                "FROM Message m, Session s "
-                "WHERE m.session_id = s.id "
-                "AND (m.content LIKE %(q)s "
-                "   OR m.tool_name LIKE %(q)s) "
+                "SELECT @rid as rid, session_id, role, content, "
+                "timestamp, tool_name "
+                "FROM Message "
+                "WHERE (content LIKE %(q)s "
+                "   OR tool_name LIKE %(q)s) "
                 f"{active_clause} "
-                "ORDER BY m.timestamp DESC, m.@rid "
+                "ORDER BY timestamp DESC, @rid "
                 "LIMIT %(l)s SKIP %(o)s",
                 {"q": f"%{query}%", "l": limit, "o": offset},
             )
         else:
             rows = self._adapter.query(
-                "SELECT m.session_id, m.role, m.content, "
-                "m.timestamp, m.tool_name, "
-                "s.source, s.model, s.started_at as session_started "
-                "FROM Message m, Session s "
-                "WHERE m.session_id = s.id "
-                "AND m.content LIKE %(q)s "
+                "SELECT session_id, role, content, "
+                "timestamp, tool_name "
+                "FROM Message "
+                "WHERE content LIKE %(q)s "
                 f"{active_clause} "
-                "ORDER BY m.timestamp DESC "
+                "ORDER BY timestamp DESC "
                 "LIMIT %(l)s SKIP %(o)s",
                 {"q": f"%{query}%", "l": limit, "o": offset},
             )
+
+        # Enrich with session metadata (source, model)
+        session_cache = {}
+        def _get_session(sid):
+            if sid not in session_cache:
+                s = self._adapter.query(
+                    "SELECT source, model, started_at FROM Session WHERE id = %s",
+                    (sid,),
+                )
+                session_cache[sid] = s[0] if s else {}
+            return session_cache[sid]
+
         results: List[Dict] = []
         for r in rows:
             content = _decode_content(r.get("content"))
             content_str = str(content) if content else ""
             snippet = self._build_snippet(content_str, query)
+            sid = r.get("session_id")
+            s = _get_session(sid)
             results.append({
                 "id": _rid_to_int(str(r.get("@rid", r.get("rid", "")))),
-                "session_id": r.get("session_id"),
+                "session_id": sid,
                 "role": r.get("role"),
                 "snippet": snippet,
                 "timestamp": r.get("timestamp"),
                 "tool_name": r.get("tool_name"),
-                "source": r.get("source"),
-                "model": r.get("model"),
-                "session_started": r.get("session_started"),
+                "source": s.get("source"),
+                "model": s.get("model"),
+                "session_started": s.get("started_at"),
             })
         return results
 
