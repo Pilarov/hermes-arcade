@@ -924,8 +924,6 @@ class ArcadedbSessionDB:
                 "LIMIT %(l)s SKIP %(o)s",
                 {"q": f"%{query}%", "l": limit, "o": offset},
             )
-                )
-
         results: List[Dict] = []
         for r in rows:
             content = _decode_content(r.get("content"))
