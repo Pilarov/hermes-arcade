@@ -195,11 +195,7 @@ def arcadedb_adapter(arcadedb_config):
         pytest.skip("ArcadeDBAdapter not yet implemented (Phase 2)")
     adapter = ArcadeDBAdapter(arcadedb_config)
     adapter.connect()
-    # Clean database before each test
-    try:
-        adapter.execute("DELETE VERTEX V")
-    except Exception:
-        pass
+    # Per-test cleanup is handled by individual tests
     yield adapter
     adapter.close()
 
