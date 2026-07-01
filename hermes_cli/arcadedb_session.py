@@ -1116,11 +1116,11 @@ class ArcadedbSessionDB:
         )
         if existing:
             self._adapter.execute(
-                "UPDATE StateMeta SET value = %s WHERE key = %s", (value, key)
+                f"UPDATE StateMeta SET value = {_q(value)} WHERE key = {_q(key)}"
             )
         else:
             self._adapter.execute(
-                "INSERT INTO StateMeta SET key = %s, value = %s", (key, value)
+                f"CREATE VERTEX StateMeta SET key = {_q(key)}, value = {_q(value)}"
             )
 
     # ==================================================================
