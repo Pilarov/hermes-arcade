@@ -902,9 +902,9 @@ class ArcadedbSessionDB:
                 "SELECT m.@rid as rid, m.session_id, m.role, m.content, "
                 "m.timestamp, m.tool_name, "
                 "s.source, s.model, s.started_at as session_started "
-                "FROM Message m "
-                "LET s = (SELECT FROM Session WHERE id = m.session_id) "
-                "WHERE (m.content LIKE %(q)s "
+                "FROM Message m, Session s "
+                "WHERE m.session_id = s.id "
+                "AND (m.content LIKE %(q)s "
                 "   OR m.tool_name LIKE %(q)s) "
                 f"{active_clause} "
                 "ORDER BY m.timestamp DESC, m.@rid "
@@ -912,31 +912,18 @@ class ArcadedbSessionDB:
                 {"q": f"%{query}%", "l": limit, "o": offset},
             )
         else:
-            try:
-                rows = self._adapter.query(
-                    "SELECT m.session_id, m.role, m.content, "
-                    "m.timestamp, m.tool_name, "
-                    "s.source, s.model, s.started_at as session_started "
-                    "FROM Message m "
-                    "LET s = (SELECT FROM Session WHERE id = m.session_id) "
-                    "WHERE SEARCH_INDEX('Message[content]', %(q)s) = true "
-                    f"{active_clause} "
-                    "ORDER BY $score DESC, m.timestamp DESC "
-                    "LIMIT %(l)s SKIP %(o)s",
-                    {"q": query, "l": limit, "o": offset},
-                )
-            except ArcadeDBError:
-                rows = self._adapter.query(
-                    "SELECT m.session_id, m.role, m.content, "
-                    "m.timestamp, m.tool_name, "
-                    "s.source, s.model, s.started_at as session_started "
-                    "FROM Message m "
-                    "LET s = (SELECT FROM Session WHERE id = m.session_id) "
-                    "WHERE m.content LIKE %(q)s "
-                    f"{active_clause} "
-                    "ORDER BY m.timestamp DESC "
-                    "LIMIT %(l)s SKIP %(o)s",
-                    {"q": f"%{query}%", "l": limit, "o": offset},
+            rows = self._adapter.query(
+                "SELECT m.session_id, m.role, m.content, "
+                "m.timestamp, m.tool_name, "
+                "s.source, s.model, s.started_at as session_started "
+                "FROM Message m, Session s "
+                "WHERE m.session_id = s.id "
+                "AND m.content LIKE %(q)s "
+                f"{active_clause} "
+                "ORDER BY m.timestamp DESC "
+                "LIMIT %(l)s SKIP %(o)s",
+                {"q": f"%{query}%", "l": limit, "o": offset},
+            )
                 )
 
         results: List[Dict] = []
