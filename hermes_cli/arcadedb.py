@@ -206,21 +206,29 @@ class ArcadeDBAdapter:
                 cur.close()
                 try: conn.close()
                 except: pass
-                # Rebuild the pool — all connections may be bad (TD-2)
-                self.close()
-                self.connect()
-                conn2 = self._pool.getconn()
-                cur2 = conn2.cursor()
+                # ArcadeDB server may have stale session state.
+                # Use a fresh standalone connection.
+                import psycopg as pg_raw
                 try:
-                    cur2.execute(sql, params)
+                    raw_conn = pg_raw.connect(
+                        host=self._cfg.host, port=self._cfg.port,
+                        dbname=self._cfg.database,
+                        user=self._cfg.user, password=self._cfg.password,
+                        connect_timeout=5, sslmode="disable",
+                        autocommit=True, row_factory=dict_row,
+                    )
+                    raw_cur = raw_conn.cursor()
+                    raw_cur.execute(sql, params)
                     try:
-                        rows = [dict(r) for r in cur2.fetchall()] if cur2.description else []
-                    except Exception:
+                        rows = [dict(r) for r in raw_cur.fetchall()] if raw_cur.description else []
+                    except:
                         rows = []
                     return rows
                 finally:
-                    cur2.close()
-                    self._pool.putconn(conn2)
+                    try: raw_cur.close()
+                    except: pass
+                    try: raw_conn.close()
+                    except: pass
             raise ArcadeDBError(err) from e
         finally:
             cur.close()
