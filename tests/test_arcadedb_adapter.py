@@ -43,6 +43,13 @@ class TestConnection:
 
 @pytest.mark.skipif(not HAS_ADAPTER, reason="Phase 2 not yet implemented")
 class TestTransaction:
+    @pytest.fixture(autouse=True)
+    def _setup(self, arcadedb_adapter):
+        arcadedb_adapter.execute("CREATE VERTEX TYPE TestTx IF NOT EXISTS")
+        # Clean up from previous runs
+        try: arcadedb_adapter.execute("DELETE VERTEX TestTx")
+        except: pass
+
     def test_commit(self, arcadedb_adapter):
         def _do(cur):
             cur.execute(f"CREATE VERTEX TestTx SET name = {_q('tx-test-1')}")
@@ -78,6 +85,12 @@ class TestTransaction:
 
 @pytest.mark.skipif(not HAS_ADAPTER, reason="Phase 2 not yet implemented")
 class TestQueryMethods:
+    @pytest.fixture(autouse=True)
+    def _setup(self, arcadedb_adapter):
+        arcadedb_adapter.execute("CREATE VERTEX TYPE TestQ IF NOT EXISTS")
+        try: arcadedb_adapter.execute("DELETE VERTEX TestQ")
+        except: pass
+
     def test_execute_insert(self, arcadedb_adapter):
         arcadedb_adapter.execute(
             f"CREATE VERTEX TestQ SET name = {_q('insert-ok')}"
@@ -107,6 +120,13 @@ class TestQueryMethods:
 
 @pytest.mark.skipif(not HAS_ADAPTER, reason="Phase 2 not yet implemented")
 class TestVectorHandling:
+    @pytest.fixture(autouse=True)
+    def _setup(self, arcadedb_adapter):
+        arcadedb_adapter.execute("CREATE VERTEX TYPE TestV IF NOT EXISTS")
+        arcadedb_adapter.execute("CREATE PROPERTY TestV.embedding IF NOT EXISTS LIST")
+        try: arcadedb_adapter.execute("DELETE VERTEX TestV")
+        except: pass
+
     def test_vector_sql_literal(self, arcadedb_adapter):
         vec = [0.1, 0.2, 0.3, 0.4]
         vec_str = ArcadeDBAdapter._vec(vec)
