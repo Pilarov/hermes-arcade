@@ -1111,17 +1111,17 @@ class ArcadedbSessionDB:
         return rows[0].get("value") if rows else None
 
     def set_meta(self, key: str, value: str) -> None:
-        existing = self._adapter.query(
-            "SELECT FROM StateMeta WHERE key = %s", (key,)
+        # Delete old + create new — ArcadeDB 26.7.1 UPDATE on custom
+        # vertex types can fail with "Transaction not active"
+        try:
+            self._adapter.execute(
+                f"DELETE VERTEX StateMeta WHERE key = {_q(key)}"
+            )
+        except Exception:
+            pass  # first write or already deleted
+        self._adapter.execute(
+            f"CREATE VERTEX StateMeta SET key = {_q(key)}, value = {_q(value)}"
         )
-        if existing:
-            self._adapter.execute(
-                f"UPDATE StateMeta SET value = {_q(value)} WHERE key = {_q(key)}"
-            )
-        else:
-            self._adapter.execute(
-                f"CREATE VERTEX StateMeta SET key = {_q(key)}, value = {_q(value)}"
-            )
 
     # ==================================================================
     # Session Deletion & Maintenance
