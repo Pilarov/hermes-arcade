@@ -10028,10 +10028,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
                 i += 1
 
         try:
-            from hermes_state import SessionDB
+            from hermes_state import SessionDB, create_session_db
             from agent.insights import InsightsEngine
 
-            db = SessionDB()
+            db = create_session_db()
             engine = InsightsEngine(db)
             report = engine.generate(days=days, source=source)
             print(engine.format_terminal(report))

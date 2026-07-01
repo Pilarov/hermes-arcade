@@ -3674,13 +3674,13 @@ class GatewaySlashCommandsMixin:
                     i += 1
 
         try:
-            from hermes_state import SessionDB
+            from hermes_state import SessionDB, create_session_db
             from agent.insights import InsightsEngine
 
             loop = asyncio.get_running_loop()
 
             def _run_insights():
-                db = SessionDB()
+                db = create_session_db()
                 engine = InsightsEngine(db)
                 report = engine.generate(days=days, source=source)
                 result = engine.format_gateway(report)

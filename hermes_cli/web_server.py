@@ -3462,7 +3462,7 @@ def get_profiles_sessions(
     if order not in ("created", "recent"):
         raise HTTPException(status_code=400, detail="order must be one of: created, recent")
 
-    from hermes_state import SessionDB
+    from hermes_state import SessionDB, create_session_db
     from hermes_cli import profiles as profiles_mod
 
     targets: List[Tuple[str, Path]] = []
@@ -7751,7 +7751,7 @@ def _session_latest_descendant(session_id: str):
     /model may create child sessions. Dashboard refresh should continue the
     newest child instead of reopening the old parent.
     """
-    from hermes_state import SessionDB
+    from hermes_state import SessionDB, create_session_db
 
     def row_get(row, key, index):
         if isinstance(row, dict):
@@ -7764,7 +7764,7 @@ def _session_latest_descendant(session_id: str):
             except Exception:
                 return None
 
-    db = SessionDB()
+    db = create_session_db()
     try:
         sid = db.resolve_session_id(session_id)
         if not sid or not db.get_session(sid):
@@ -7969,9 +7969,9 @@ def _open_session_db_for_profile(profile: Optional[str]):
     ``state.db`` directly so the primary backend can serve cross-profile reads
     (transcripts, detail) without spawning that profile's backend.
     """
-    from hermes_state import SessionDB
+    from hermes_state import SessionDB, create_session_db
     if not profile:
-        return SessionDB()
+        return create_session_db()
     _name, home = _cron_profile_home(profile)
     return SessionDB(db_path=Path(home) / "state.db")
 
