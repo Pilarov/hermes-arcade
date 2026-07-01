@@ -206,6 +206,9 @@ class ArcadeDBAdapter:
                 cur.close()
                 try: conn.close()
                 except: pass
+                # Rebuild the pool — all connections may be bad (TD-2)
+                self.close()
+                self.connect()
                 conn2 = self._pool.getconn()
                 cur2 = conn2.cursor()
                 try:
