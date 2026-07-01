@@ -904,11 +904,11 @@ class ArcadedbSessionDB:
                 "s.source, s.model, s.started_at as session_started "
                 "FROM Message m "
                 "LET s = (SELECT FROM Session WHERE id = m.session_id) "
-                "WHERE (m.content LIKE %(q)s ESCAPE '\\\\' "
-                "   OR m.tool_name LIKE %(q)s ESCAPE '\\\\') "
+                "WHERE (m.content LIKE %(q)s "
+                "   OR m.tool_name LIKE %(q)s) "
                 f"{active_clause} "
                 "ORDER BY m.timestamp DESC, m.@rid "
-                "LIMIT %(l)s OFFSET %(o)s",
+                "LIMIT %(l)s SKIP %(o)s",
                 {"q": f"%{query}%", "l": limit, "o": offset},
             )
         else:
@@ -922,7 +922,7 @@ class ArcadedbSessionDB:
                     "WHERE SEARCH_INDEX('Message[content]', %(q)s) = true "
                     f"{active_clause} "
                     "ORDER BY $score DESC, m.timestamp DESC "
-                    "LIMIT %(l)s OFFSET %(o)s",
+                    "LIMIT %(l)s SKIP %(o)s",
                     {"q": query, "l": limit, "o": offset},
                 )
             except ArcadeDBError:
@@ -932,10 +932,10 @@ class ArcadedbSessionDB:
                     "s.source, s.model, s.started_at as session_started "
                     "FROM Message m "
                     "LET s = (SELECT FROM Session WHERE id = m.session_id) "
-                    "WHERE m.content LIKE %(q)s ESCAPE '\\\\' "
+                    "WHERE m.content LIKE %(q)s "
                     f"{active_clause} "
                     "ORDER BY m.timestamp DESC "
-                    "LIMIT %(l)s OFFSET %(o)s",
+                    "LIMIT %(l)s SKIP %(o)s",
                     {"q": f"%{query}%", "l": limit, "o": offset},
                 )
 
