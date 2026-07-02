@@ -27,7 +27,18 @@ if TYPE_CHECKING:
 # DDL helpers
 # ---------------------------------------------------------------------------
 
-_VECTOR_DIM = 1024
+_VECTOR_DIM = 1024  # default (multilingual-e5-large). Override via set_vector_dim().
+
+
+def set_vector_dim(dim: int) -> None:
+    """Override the default vector dimension (e.g. 1536 for OpenAI, 768 for Ollama)."""
+    global _VECTOR_DIM
+    _VECTOR_DIM = dim
+
+
+def get_vector_dim() -> int:
+    """Current vector dimension."""
+    return _VECTOR_DIM
 
 
 def _drop(name: str, kind: str = "TYPE") -> str:
@@ -289,10 +300,17 @@ VERTICES: Dict[str, Dict[str, Any]] = {
             ("name", "STRING"),
             ("path", "STRING"),
             ("description", "STRING"),
+            ("slug", "STRING"),
+            ("icon", "STRING"),
+            ("color", "STRING"),
+            ("primary_path", "STRING"),
+            ("board_slug", "STRING"),
+            ("archived", "INTEGER", "DEFAULT 0"),
             ("created_at", "DOUBLE"),
         ],
         "indexes": [
             ("name", "UNIQUE"),
+            ("slug", "UNIQUE"),
         ],
     },
     "KanbanBoard": {
@@ -377,6 +395,86 @@ VERTICES: Dict[str, Dict[str, Any]] = {
         "indexes": [
             (("chat_id", "thread_id"), "UNIQUE"),
             (("session_id",), "NOTUNIQUE"),
+        ],
+    },
+    # Block 1: Phase 8 vertex types
+    "ProjectFolder": {
+        "props": [
+            ("project_id", "STRING"),
+            ("path", "STRING"),
+            ("label", "STRING"),
+            ("is_primary", "INTEGER", "DEFAULT 0"),
+            ("added_at", "DOUBLE"),
+        ],
+        "indexes": [
+            (("project_id", "path"), "NOTUNIQUE"),
+        ],
+    },
+    "DiscoveredRepo": {
+        "props": [
+            ("root", "STRING"),
+            ("label", "STRING"),
+            ("last_seen", "DOUBLE"),
+        ],
+        "indexes": [
+            ("root", "UNIQUE"),
+        ],
+    },
+    "Response": {
+        "props": [
+            ("response_id", "STRING"),
+            ("data", "STRING"),
+            ("accessed_at", "DOUBLE"),
+        ],
+        "indexes": [
+            ("response_id", "UNIQUE"),
+            ("accessed_at", "NOTUNIQUE"),
+        ],
+    },
+    "Conversation": {
+        "props": [
+            ("name", "STRING"),
+            ("response_id", "STRING"),
+        ],
+        "indexes": [
+            ("name", "UNIQUE"),
+        ],
+    },
+    "VerificationEvent": {
+        "props": [
+            ("command", "STRING"),
+            ("cwd", "STRING"),
+            ("session_id", "STRING"),
+            ("exit_code", "INTEGER"),
+            ("output_summary", "STRING"),
+            ("created_at", "DOUBLE"),
+        ],
+        "indexes": [
+            (("session_id", "cwd", "created_at"), "NOTUNIQUE"),
+        ],
+    },
+    "VerificationState": {
+        "props": [
+            ("session_id", "STRING"),
+            ("cwd", "STRING"),
+            ("changed_paths_json", "STRING"),
+            ("last_event_id", "INTEGER"),
+            ("updated_at", "DOUBLE"),
+        ],
+        "indexes": [
+            (("session_id", "cwd"), "NOTUNIQUE"),
+        ],
+    },
+    "PendingIngest": {
+        "props": [
+            ("user_id", "STRING"),
+            ("session_id", "STRING"),
+            ("messages_json", "STRING"),
+            ("last_error", "STRING"),
+            ("created_at", "DOUBLE"),
+        ],
+        "indexes": [
+            ("created_at", "NOTUNIQUE"),
         ],
     },
 }

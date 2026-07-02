@@ -5702,6 +5702,14 @@ def create_session_db(
                 from hermes_cli.embedder import create_embedder
                 embedder = create_embedder(emb_cfg)
                 embedder.initialize()
+                # Sync ArcadeDB vector dimension with embedder output (Block 1.3)
+                from hermes_cli.arcadedb_schema import set_vector_dim, get_vector_dim
+                emb_dim = embedder.embed(["test"])[0]
+                embedder_dim = len(emb_dim.dense)
+                if embedder_dim != get_vector_dim():
+                    set_vector_dim(embedder_dim)
+                    import logging
+                    logging.info("VECTOR_DIM set to %d (embedder: %s)", embedder_dim, embedder.name)
             except Exception:
                 import logging
                 logging.debug("Embedder not available, search will use FTS fallback")
