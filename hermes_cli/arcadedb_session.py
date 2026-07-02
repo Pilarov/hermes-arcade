@@ -844,18 +844,20 @@ class ArcadedbSessionDB:
     ) -> Dict[str, Any]:
         def _do(cur):
             cur.execute(
-                "SELECT @rid FROM Message WHERE session_id = %s ORDER BY timestamp, @rid",
+                "SELECT @rid, timestamp FROM Message WHERE session_id = %s ORDER BY timestamp, @rid",
                 (session_id,),
             )
             all_rows = cur.fetchall()
 
             target_rid = None
+            target_ts = None
             target_msg = None
             for r in all_rows:
                 rid_str = str(r["@rid"])
                 rid_hash = _rid_to_int(rid_str)
                 if rid_hash == target_message_id:
                     target_rid = rid_str
+                    target_ts = r["timestamp"]
                     cur.execute("SELECT FROM Message WHERE @rid = %s", (rid_str,))
                     tm = cur.fetchone()
                     if tm:
@@ -866,18 +868,17 @@ class ArcadedbSessionDB:
             if target_rid is None:
                 raise ValueError(f"Message {target_message_id} not found")
 
+            # AUD-10: use timestamp instead of @rid for ordering (ArcadeDB stores @rid as string)
             cur.execute(
-                "UPDATE Message SET active = 0 "
-                "WHERE session_id = %(sid)s AND @rid >= %(rid)s AND active = 1",
-                {"sid": session_id, "rid": target_rid},
+                f"UPDATE Message SET active = 0 "
+                f"WHERE session_id = {_q(session_id)} AND timestamp >= {_n(target_ts)} AND active = 1"
             )
             cur.execute(
-                "UPDATE Session SET rewind_count = rewind_count + 1 WHERE id = %s",
-                (session_id,),
+                f"UPDATE Session SET rewind_count = rewind_count + 1 WHERE id = {_q(session_id)}"
             )
             cur.execute(
                 "SELECT @rid FROM Message WHERE session_id = %(sid)s AND active = 1 "
-                "ORDER BY @rid DESC LIMIT 1",
+                "ORDER BY timestamp DESC LIMIT 1",
                 {"sid": session_id},
             )
             head = cur.fetchone()

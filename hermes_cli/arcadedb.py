@@ -70,42 +70,44 @@ class ArcadeDBAdapter:
         return self._pool is not None
 
     def connect(self) -> None:
-        if self._pool is not None:
-            return
+        with self._lock:
+            if self._pool is not None:
+                return
 
-        conninfo = (
-            f"host={self._cfg.host} "
-            f"port={self._cfg.port} "
-            f"dbname={self._cfg.database} "
-            f"user={self._cfg.user} "
-            f"password={self._cfg.password} "
-            f"connect_timeout={int(self._cfg.timeout)} "
-            "sslmode=disable"
-        )
-
-        try:
-            self._pool = ConnectionPool(
-                conninfo=conninfo,
-                min_size=self._cfg.pool_min,
-                max_size=self._cfg.pool_max,
-                timeout=self._cfg.pool_timeout,
-                open=True,
-                kwargs={
-                    "autocommit": True,
-                    "row_factory": dict_row,
-                },
+            conninfo = (
+                f"host={self._cfg.host} "
+                f"port={self._cfg.port} "
+                f"dbname={self._cfg.database} "
+                f"user={self._cfg.user} "
+                f"password={self._cfg.password} "
+                f"connect_timeout={int(self._cfg.timeout)} "
+                "sslmode=disable"
             )
-            self._check_health()
-        except (PoolTimeout, psycopg.OperationalError) as e:
+
+            try:
+                self._pool = ConnectionPool(
+                    conninfo=conninfo,
+                    min_size=self._cfg.pool_min,
+                    max_size=self._cfg.pool_max,
+                    timeout=self._cfg.pool_timeout,
+                    open=True,
+                    kwargs={
+                        "autocommit": True,
+                        "row_factory": dict_row,
+                    },
+                )
+                self._check_health()
+            except (PoolTimeout, psycopg.OperationalError) as e:
+                if self._pool is not None:
+                    self._pool.close()
+                    self._pool = None
+                raise ArcadeDBError(f"connection failed: {e}") from e
+
+    def close(self) -> None:
+        with self._lock:
             if self._pool is not None:
                 self._pool.close()
                 self._pool = None
-            raise ArcadeDBError(f"connection failed: {e}") from e
-
-    def close(self) -> None:
-        if self._pool is not None:
-            self._pool.close()
-            self._pool = None
 
     def _check_health(self) -> bool:
         try:
@@ -291,25 +293,31 @@ class ArcadeDBAdapter:
     def _fmt_tuple(sql: str, params: tuple) -> str:
         """Replace %s placeholders with SQL-escaped values from a tuple.
 
-        Splits on '%s' and interpolates values using _q()-style escaping.
-        Robust against edge cases (no regex).
+        Uses a simple replace-one-at-a-time loop instead of regex/split
+        to avoid issues with %s inside string literals.
         """
-        parts = sql.split("%s")
-        if len(parts) - 1 != len(params):
-            return sql  # mismatch — passthrough
         result = []
-        for i, val in enumerate(params):
-            result.append(parts[i])
-            if val is None:
-                result.append("NULL")
-            elif isinstance(val, str):
-                escaped = val.replace("\\", "\\\\").replace("'", "\\'")
-                result.append(f"'{escaped}'")
-            elif isinstance(val, (int, float)):
-                result.append(str(val))
+        param_idx = 0
+        param_list = list(params)
+        i = 0
+        while i < len(sql):
+            if sql[i:i+2] == "%s" and param_idx < len(param_list):
+                val = param_list[param_idx]
+                param_idx += 1
+                if val is None:
+                    result.append("NULL")
+                elif isinstance(val, str):
+                    escaped = val.replace("\\", "\\\\").replace("'", "\\'")
+                    result.append(f"'{escaped}'")
+                elif isinstance(val, (int, float)):
+                    result.append(str(val))
+                else:
+                    result.append(f"'{val}'")
+                i += 2
             else:
-                result.append(f"'{val}'")
-        result.append(parts[-1])
+                result.append(sql[i])
+                i += 1
+        result.append(sql[i:]) if i < len(sql) else None
         return "".join(result)
 
     # ------------------------------------------------------------------
