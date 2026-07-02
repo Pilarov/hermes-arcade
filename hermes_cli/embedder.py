@@ -188,13 +188,22 @@ def create_embedder(config: Optional[Dict[str, Any]] = None) -> EmbedderProvider
             cache_dir=config.get("cache_dir"),
         )
 
-    if provider_name == "openai":
+    if provider_name == "openai" or provider_name == "openai-compatible":
         import os
         api_key = config.get("api_key") or os.environ.get("OPENAI_API_KEY", "")
         base_url = config.get("base_url") or os.environ.get("OPENAI_BASE_URL", "")
         return OpenAIEmbedder(
             model_name=config.get("model", OpenAIEmbedder.MODEL_NAME),
             api_key=api_key,
+            base_url=base_url,
+        )
+
+    if provider_name == "ollama":
+        import os
+        base_url = config.get("base_url", "http://localhost:11434/v1")
+        return OpenAIEmbedder(
+            model_name=config.get("model", "nomic-embed-text"),
+            api_key="ollama",
             base_url=base_url,
         )
 
