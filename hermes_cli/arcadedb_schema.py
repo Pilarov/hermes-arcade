@@ -680,7 +680,10 @@ class SchemaManager:
 
         sql = f"CREATE INDEX IF NOT EXISTS ON `{type_name}` ({props_str}) {kind}"
         if metadata:
-            sql += f" METADATA {{{metadata}}}"
+            if metadata.strip().startswith("METADATA "):
+                sql += f" {metadata.strip()}"
+            else:
+                sql += f" METADATA {{{metadata}}}"
         try:
             self._db.execute(sql)
         except Exception as exc:
