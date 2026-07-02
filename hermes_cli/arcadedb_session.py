@@ -515,7 +515,16 @@ class ArcadedbSessionDB:
         num_tc = len(tool_calls) if tool_calls else 0
 
         def _do(cur):
-            # ArcadeDB PG protocol limits bind parameters — use string formatting
+            # Compute embedding if embedder is available
+            emb_sql = ""
+            if self._embedder and content and isinstance(content, str):
+                try:
+                    emb = self._embedder.embed([content])[0]
+                    from hermes_cli.arcadedb import ArcadeDBAdapter
+                    emb_sql = f", embedding = {ArcadeDBAdapter._vec(emb.dense)}"
+                except Exception:
+                    pass
+
             sql = (
                 "CREATE VERTEX Message SET "
                 f"session_id = {_q(session_id)}, role = {_q(role)}, content = {_q(content_encoded)}, "
@@ -526,6 +535,7 @@ class ArcadedbSessionDB:
                 f"tool_call_id = {_q(tool_call_id)}, tool_name = {_q(tool_name)}, "
                 f"platform_message_id = {_q(platform_message_id)}, observed = {int(observed)}, "
                 "active = 1, compacted = 0"
+                f"{emb_sql}"
             )
             cur.execute(sql)
 
@@ -967,7 +977,12 @@ class ArcadedbSessionDB:
         profile: Optional[str] = None, days: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         if not self._embedder:
-            return []
+            # LIKE fallback without embeddings
+            return self._adapter.query(
+                f"SELECT FROM SearchMatter "
+                f"WHERE summary LIKE {_q(f'%{query}%')} "
+                f"ORDER BY created_at DESC LIMIT {top_k}"
+            )
 
         q = self._embedder.embed_query(query)
         params: Dict[str, Any] = {
