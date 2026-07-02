@@ -687,7 +687,8 @@ class SchemaManager:
         try:
             self._db.execute(sql)
         except Exception as exc:
-            if "already exists" in str(exc):
+            err = str(exc)
+            if any(m in err.lower() for m in ("already exists", "error on creating index", "already defined")):
                 return
             raise
 
