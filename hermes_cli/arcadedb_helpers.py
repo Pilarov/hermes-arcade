@@ -134,15 +134,25 @@ def _q(val) -> str:
     """Quote a Python value as an ArcadeDB SQL literal.
 
     Returns 'NULL' for None, quoted string for str, or bare value otherwise.
+    Safely escapes backslash and single-quote characters.
     Used to inline values in SQL (ArcadeDB PG protocol bind-param limit).
+
+    Edge cases handled:
+      "O'Brien"  → 'O\'Brien'
+      "a\\b"     → 'a\\\\b'
+      "'; DROP--" → '\'; DROP--'  (literal, not injection)
+      None       → NULL
     """
     if val is None:
         return "NULL"
     if isinstance(val, str):
+        # Escape backslash FIRST, then single quote
         escaped = val.replace("\\", "\\\\").replace("'", "\\'")
         return f"'{escaped}'"
     if isinstance(val, (int, float)):
         return str(val)
+    if isinstance(val, bool):
+        return "1" if val else "0"
     return f"'{val}'"
 
 

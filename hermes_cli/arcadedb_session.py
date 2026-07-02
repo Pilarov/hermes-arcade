@@ -1194,6 +1194,15 @@ class ArcadedbSessionDB:
         return False
 
     def vacuum(self) -> int:
+        """VACUUM equivalent — prune inactive vertices (TD-18)."""
+        try:
+            # Delete old inactive messages (older than 7 days)
+            cutoff = _now() - 7 * 86400
+            self._adapter.execute(
+                f"DELETE VERTEX Message WHERE active = 0 AND timestamp < {_n(cutoff)}"
+            )
+        except Exception:
+            pass
         return 0
 
     def maybe_auto_prune_and_vacuum(
