@@ -37,7 +37,8 @@ class ArcadedbMemoryStore:
         emb_sql = ""
         if self._embedder:
             emb = self._embedder.embed([content])[0]
-            emb_sql = f", embedding = {_q(emb.dense)}"
+            from hermes_cli.arcadedb import ArcadeDBAdapter
+            emb_sql = f", embedding = {ArcadeDBAdapter._vec(emb.dense)}"
 
         entities = self._extract_entities(content)
 

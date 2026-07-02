@@ -384,7 +384,7 @@ class ArcadedbSessionDB:
     ) -> List[Dict[str, Any]]:
         return self._adapter.query(
             "SELECT FROM Session WHERE source = 'cron' AND session_key LIKE %(j)s "
-            "ORDER BY started_at DESC LIMIT %(l)s OFFSET %(o)s",
+            "ORDER BY started_at DESC LIMIT %(l)s SKIP %(o)s",
             {"j": f"%{job_id}%", "l": limit, "o": offset},
         )
 
@@ -397,7 +397,7 @@ class ArcadedbSessionDB:
             where.append("source = %(src)s"); params["src"] = source
         return self._adapter.query(
             f"SELECT FROM Session WHERE {' AND '.join(where)} "
-            "ORDER BY started_at DESC LIMIT %(l)s OFFSET %(o)s", params
+            "ORDER BY started_at DESC LIMIT %(l)s SKIP %(o)s", params
         )
 
     def search_sessions_by_id(
@@ -898,9 +898,26 @@ class ArcadedbSessionDB:
         include_inactive: bool = False,
     ) -> List[Dict[str, Any]]:
         active_clause = "AND (active = 1 OR compacted = 1)" if not include_inactive else ""
-        rows = []
+        
+        # Build filter conditions (Block 2)
+        filters = []
+        if source_filter:
+            filters.append(f"source = {_q(source_filter)}")
+        if exclude_sources:
+            excl = ", ".join(_q(s) for s in exclude_sources)
+            filters.append(f"source NOT IN ({excl})")
+        if role_filter:
+            filters.append(f"role = {_q(role_filter)}")
+        filter_clause = (" AND " + " AND ".join(filters)) if filters else ""
+        
+        # Sort direction
+        sort_clause = "timestamp DESC"
+        if sort == "newest":
+            sort_clause = "timestamp DESC"
+        elif sort == "oldest":
+            sort_clause = "timestamp ASC"
 
-        # TD-22: try vector search first when embedder is available
+        rows = []
         if self._embedder:
             try:
                 q_emb = self._embedder.embed_query(query)
