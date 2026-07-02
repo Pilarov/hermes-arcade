@@ -892,22 +892,15 @@ class ArcadedbSessionDB:
         return self._adapter.transact(_do)
 
     def restore_rewound(self, session_id: str, since_message_id: int) -> int:
-        rows = self._adapter.query(
-            "SELECT @rid FROM Message WHERE session_id = %s ORDER BY @rid", (session_id,)
-        )
-        target_rid = None
-        for r in rows:
-            if _rid_to_int(str(r["@rid"])) == since_message_id:
-                target_rid = str(r["@rid"])
-                break
-        if target_rid is None:
-            return 0
         self._adapter.execute(
-            "UPDATE Message SET active = 1 WHERE session_id = %(sid)s "
-            "AND @rid >= %(rid)s AND active = 0 AND compacted = 0",
-            {"sid": session_id, "rid": target_rid},
+            f"UPDATE Message SET active = 1 WHERE session_id = {_q(session_id)} "
+            f"AND active = 0 AND compacted = 0"
         )
-        return 0  # simplified
+        rows = self._adapter.query(
+            f"SELECT count(*) as cnt FROM Message WHERE session_id = {_q(session_id)} "
+            "AND active = 1"
+        )
+        return rows[0].get("cnt", 0) if rows else 0
 
     def list_recent_user_messages(
         self, session_id: str, limit: int = 20, include_inactive: bool = False,

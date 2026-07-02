@@ -21,13 +21,33 @@ import time
 import uuid
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1", tags=["openai-compat"])
+
+
+def _get_api_key(config: dict) -> str:
+    """Read API key from config or env."""
+    return (
+        config.get("gateway", {}).get("api_server", {}).get("key", "")
+        or os.environ.get("HERMES_API_KEY", "")
+    )
+
+
+def verify_api_key(authorization: str = Header(None)):
+    """Validate API key from Authorization header."""
+    if not authorization:
+        return  # Allow no-auth if no key configured
+    token = authorization.replace("Bearer ", "") if authorization.startswith("Bearer ") else authorization
+    from hermes_cli.config import load_config
+    config = load_config()
+    valid_key = _get_api_key(config)
+    if valid_key and token != valid_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
 
 class ChatMessage(BaseModel):
@@ -116,7 +136,7 @@ def _make_agent(model: str, provider: str, api_key: str, base_url: str):
 
 
 @router.post("/chat/completions")
-async def chat_completions(req: ChatCompletionRequest):
+async def chat_completions(req: ChatCompletionRequest, _auth: None = Depends(verify_api_key)):
     """OpenAI-compatible chat completion endpoint."""
     user_msg = _extract_user_message(req.messages)
 
