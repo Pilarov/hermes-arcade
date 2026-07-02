@@ -140,30 +140,33 @@ class ArcadeDBAdapter:
     def transact(self, fn):
         """Execute fn(cursor) inside BEGIN/COMMIT transaction.
 
-        ArcadeDB PG plugin supports only simple query mode.
-        We use SQL-level BEGIN/COMMIT/ROLLBACK instead of
-        psycopg autocommit toggling.
+        Uses a FRESH connection for every transaction to avoid
+        ArcadeDB PG pool corruption (simple query mode limitation).
+        Read operations (execute/query) still use the connection pool.
         """
-        if self._pool is None:
-            raise ArcadeDBError("not connected")
-
-        conn = self._pool.getconn()
+        # Fresh connection — pool corruption workaround for writes
+        conn = psycopg.connect(
+            host=self._cfg.host, port=self._cfg.port,
+            dbname=self._cfg.database,
+            user=self._cfg.user, password=self._cfg.password,
+            connect_timeout=5, sslmode="disable",
+            autocommit=True, row_factory=dict_row,
+        )
         cur = conn.cursor()
         try:
             cur.execute("BEGIN")
             result = fn(cur)
             cur.execute("COMMIT")
-            cur.close()
-            self._pool.putconn(conn)
             return result
         except Exception:
             try:
                 cur.execute("ROLLBACK")
             except Exception:
                 pass
-            cur.close()
-            conn.close()  # discard bad connection, pool will create fresh one
             raise
+        finally:
+            cur.close()
+            conn.close()
 
     # ------------------------------------------------------------------
     # Query API
