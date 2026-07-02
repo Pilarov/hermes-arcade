@@ -561,6 +561,9 @@ class SchemaManager:
 
         if len(idx_def) == 2:
             props_str = idx_def[0]
+            # Handle composite index: ((prop1, prop2), kind)
+            if isinstance(props_str, tuple):
+                props_str = ", ".join(props_str)
             kind = idx_def[1]
         elif len(idx_def) == 3:
             # If third element looks like an index kind → composite index

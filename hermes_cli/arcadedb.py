@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -29,6 +30,10 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 logger = logging.getLogger(__name__)
+
+# Retry config (TD-7)
+_MAX_RETRIES = 3
+_RETRY_DELAY_S = 0.1
 
 
 class ArcadeDBError(Exception):
@@ -316,3 +321,23 @@ class ArcadeDBAdapter:
     def _parse_vec(s: str) -> List[float]:
         """Parse JSON-array SQL literal back to List[float]."""
         return json.loads(s)
+
+    # ------------------------------------------------------------------
+    # Retry helper (TD-7)
+    # ------------------------------------------------------------------
+
+    def _retry(self, fn, *args, **kwargs):
+        """Execute fn with retry on transient errors."""
+        last_err = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                return fn(*args, **kwargs)
+            except ArcadeDBError as e:
+                err = str(e)
+                if "connection" in err.lower() or "timeout" in err.lower():
+                    last_err = e
+                    logger.debug("Retry %s/%s: %s", attempt + 1, _MAX_RETRIES, e)
+                    time.sleep(_RETRY_DELAY_S * (attempt + 1))
+                    continue
+                raise
+        raise last_err
