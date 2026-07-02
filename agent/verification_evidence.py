@@ -59,6 +59,54 @@ def _db_path() -> Path:
     return get_hermes_home() / "verification_evidence.db"
 
 
+# ---------------------------------------------------------------------------
+# ArcadeDB Verification Store (Phase 8.3)
+# ---------------------------------------------------------------------------
+
+class ArcadedbVerificationStore:
+    """ArcadeDB-backed verification audit trail."""
+
+    def __init__(self, adapter):
+        from hermes_cli.arcadedb_helpers import _q, _n, _now
+        self._adapter = adapter
+        self._q = _q
+        self._n = _n
+        self._now = _now
+
+    def record_terminal_result(self, command: str, cwd: str, session_id: str,
+                               exit_code: int, output: str) -> None:
+        now = self._now()
+        self._adapter.execute(
+            f"CREATE VERTEX VerificationEvent SET "
+            f"command = {self._q(command)}, cwd = {self._q(cwd)}, "
+            f"session_id = {self._q(session_id)}, exit_code = {exit_code}, "
+            f"output_summary = {self._q(output[:500])}, created_at = {self._n(now)}"
+        )
+
+    def mark_workspace_edited(self, session_id: str, cwd: str,
+                              paths: list[str]) -> None:
+        import json
+        self._adapter.execute(
+            f"CREATE VERTEX VerificationState SET "
+            f"session_id = {self._q(session_id)}, cwd = {self._q(cwd)}, "
+            f"changed_paths_json = {self._q(json.dumps(paths))}, "
+            f"updated_at = {self._n(self._now())}"
+        )
+
+    def verification_status(self, session_id: str, cwd: str) -> str:
+        rows = self._adapter.query(
+            f"SELECT exit_code FROM VerificationEvent "
+            f"WHERE session_id = {self._q(session_id)} AND cwd = {self._q(cwd)} "
+            f"ORDER BY created_at DESC LIMIT 1"
+        )
+        if not rows:
+            return "unverified"
+        return "passed" if rows[0].get("exit_code") == 0 else "failed"
+
+    def close(self) -> None:
+        pass
+
+
 def _connect() -> sqlite3.Connection:
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -538,6 +538,73 @@ class ResponseStore:
 
 
 # ---------------------------------------------------------------------------
+# ArcadeDB Response Store (Phase 8.2)
+# ---------------------------------------------------------------------------
+
+class ArcadedbResponseStore:
+    """ArcadeDB-backed LRU response cache."""
+
+    def __init__(self, adapter, max_size: int = 1000):
+        from hermes_cli.arcadedb_helpers import _q, _n
+        self._adapter = adapter
+        self._max_size = max_size
+        self._q = _q
+        self._n = _n
+
+    def get(self, response_id: str) -> dict | None:
+        import json
+        rows = self._adapter.query(
+            f"SELECT data FROM Response WHERE response_id = {self._q(response_id)} LIMIT 1"
+        )
+        if rows:
+            self._adapter.execute(
+                f"UPDATE Response SET accessed_at = {self._n(time.time())} "
+                f"WHERE response_id = {self._q(response_id)}"
+            )
+            return json.loads(rows[0]["data"]) if rows[0].get("data") else None
+        return None
+
+    def put(self, response_id: str, data: dict) -> None:
+        import json, time
+        self._adapter.execute(
+            f"CREATE VERTEX Response SET "
+            f"response_id = {self._q(response_id)}, "
+            f"data = {self._q(json.dumps(data))}, "
+            f"accessed_at = {self._n(time.time())}"
+        )
+        rows = self._adapter.query("SELECT count(*) as cnt FROM Response")
+        count = rows[0].get("cnt", 0) if rows else 0
+        if count > self._max_size:
+            excess = count - self._max_size
+            self._adapter.execute(
+                f"DELETE FROM Response WHERE @rid IN "
+                f"(SELECT @rid FROM Response ORDER BY accessed_at ASC LIMIT {excess})"
+            )
+
+    def delete(self, response_id: str) -> None:
+        self._adapter.execute(f"DELETE VERTEX Response WHERE response_id = {self._q(response_id)}")
+
+    def get_conversation(self, name: str) -> str | None:
+        rows = self._adapter.query(
+            f"SELECT response_id FROM Conversation WHERE name = {self._q(name)} LIMIT 1"
+        )
+        return rows[0]["response_id"] if rows else None
+
+    def set_conversation(self, name: str, response_id: str) -> None:
+        self._adapter.execute(f"DELETE VERTEX Conversation WHERE name = {self._q(name)}")
+        self._adapter.execute(
+            f"CREATE VERTEX Conversation SET name = {self._q(name)}, response_id = {self._q(response_id)}"
+        )
+
+    def close(self) -> None:
+        pass
+
+    def __len__(self) -> int:
+        rows = self._adapter.query("SELECT count(*) as cnt FROM Response")
+        return rows[0].get("cnt", 0) if rows else 0
+
+
+# ---------------------------------------------------------------------------
 # CORS middleware
 # ---------------------------------------------------------------------------
 
