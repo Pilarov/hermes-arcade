@@ -146,7 +146,9 @@ def _q(val) -> str:
     if val is None:
         return "NULL"
     if isinstance(val, str):
-        # Escape backslash FIRST, then single quote
+        # Strip null bytes (ArcadeDB PG protocol can't handle \x00)
+        val = val.replace("\x00", "")
+        # Escape backslash first, then single quote
         escaped = val.replace("\\", "\\\\").replace("'", "\\'")
         return f"'{escaped}'"
     if isinstance(val, (int, float)):

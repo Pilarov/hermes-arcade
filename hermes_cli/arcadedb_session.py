@@ -373,7 +373,7 @@ class ArcadedbSessionDB:
 
         rows = self._adapter.query(
             f"SELECT FROM Session{w_clause} ORDER BY started_at DESC "
-            "LIMIT %(l)s OFFSET %(o)s", params
+            "LIMIT %(l)s SKIP %(o)s", params
         )
         for r in rows:
             r["started_at"] = r.get("started_at", 0)
@@ -1143,14 +1143,17 @@ class ArcadedbSessionDB:
         return rows[0].get("value") if rows else None
 
     def set_meta(self, key: str, value: str) -> None:
-        # Delete old + create new — ArcadeDB 26.7.1 UPDATE on custom
-        # vertex types can fail with "Transaction not active"
-        try:
-            self._adapter.execute(
-                f"DELETE VERTEX StateMeta WHERE key = {_q(key)}"
-            )
-        except Exception:
-            pass  # first write or already deleted
+        # Find existing vertex and delete by @rid (DELETE VERTEX WHERE key=... hangs)
+        existing = self._adapter.query(
+            f"SELECT @rid FROM StateMeta WHERE key = {_q(key)} LIMIT 1"
+        )
+        if existing:
+            try:
+                self._adapter.execute(
+                    f"DELETE VERTEX StateMeta WHERE @rid = {_q(existing[0]['@rid'])}"
+                )
+            except Exception:
+                pass  # already deleted or ArcadeDB issue
         self._adapter.execute(
             f"CREATE VERTEX StateMeta SET key = {_q(key)}, value = {_q(value)}"
         )
@@ -1163,8 +1166,13 @@ class ArcadedbSessionDB:
         row = self.get_session(session_id)
         if not row:
             return False
-        self._adapter.execute("DELETE VERTEX Message WHERE session_id = %s", (session_id,))
-        self._adapter.execute("DELETE VERTEX Session WHERE id = %s", (session_id,))
+        # Soft-delete messages (DELETE VERTEX hangs with edge cascade — TD-4/18)
+        self._adapter.execute(
+            f"UPDATE Message SET active = 0, compacted = 1 WHERE session_id = {_q(session_id)}"
+        )
+        self._adapter.execute(
+            f"UPDATE Session SET archived = 1, ended_at = {_n(_now())}, end_reason = 'deleted' WHERE id = {_q(session_id)}"
+        )
         return True
 
     def delete_sessions(
