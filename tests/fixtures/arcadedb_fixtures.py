@@ -239,9 +239,11 @@ def real_embedder():
 
 @pytest.fixture
 def arcadedb_session(arcadedb_adapter, mock_embedder):
-    """ArcadedbSessionDB with adapter + mock embedder."""
+    """ArcadedbSessionDB with adapter + mock embedder (schema auto-init)."""
     if not HAS_SESSION:
         pytest.skip("ArcadedbSessionDB not yet implemented (Phase 3)")
+    from hermes_cli.arcadedb_schema import SchemaManager
+    SchemaManager(arcadedb_adapter).create_all()
     session = ArcadedbSessionDB(adapter=arcadedb_adapter, embedder=mock_embedder)
     yield session
     session.close()
