@@ -1332,10 +1332,15 @@ class ArcadedbSessionDB:
         )
 
     def claim_handoff(self, session_id: str) -> bool:
+        rows = self._adapter.query(
+            f"SELECT @rid FROM Session WHERE id = {_q(session_id)} "
+            f"AND handoff_state = 'pending' LIMIT 1"
+        )
+        if not rows:
+            return False
         self._adapter.execute(
-            "UPDATE Session SET handoff_state = 'running' WHERE id = %s "
-            "AND handoff_state = 'pending'",
-            (session_id,),
+            f"UPDATE Session SET handoff_state = 'running' "
+            f"WHERE @rid = {_q(rows[0]['@rid'])}"
         )
         return True
 

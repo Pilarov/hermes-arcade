@@ -272,7 +272,7 @@ class ArcadedbKanbanDB:
             cur.execute(
                 f"CREATE EDGE HAS_COMMENT FROM "
                 f"(SELECT FROM Task WHERE @rid = {_q(task_id)}) TO "
-                f"(SELECT FROM TaskRun WHERE @rid = {_q(comment_rid)}) "
+                f"(SELECT FROM TaskComment WHERE @rid = {_q(comment_rid)}) "  # Был баг: TaskRun → TaskComment
                 f"SET created_at = {_n(now)}"
             )
             return comment_rid
