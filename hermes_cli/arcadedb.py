@@ -287,22 +287,28 @@ class ArcadeDBAdapter:
 
     @staticmethod
     def _fmt_tuple(sql: str, params: tuple) -> str:
-        """Replace %s placeholders with SQL-escaped values from a tuple."""
-        vals = list(params)
-        def _repl(m):
-            if not vals:
-                return m.group(0)
-            val = vals.pop(0)
+        """Replace %s placeholders with SQL-escaped values from a tuple.
+
+        Splits on '%s' and interpolates values using _q()-style escaping.
+        Robust against edge cases (no regex).
+        """
+        parts = sql.split("%s")
+        if len(parts) - 1 != len(params):
+            return sql  # mismatch — passthrough
+        result = []
+        for i, val in enumerate(params):
+            result.append(parts[i])
             if val is None:
-                return "NULL"
-            if isinstance(val, str):
+                result.append("NULL")
+            elif isinstance(val, str):
                 escaped = val.replace("\\", "\\\\").replace("'", "\\'")
-                return f"'{escaped}'"
-            if isinstance(val, (int, float)):
-                return str(val)
-            return f"'{val}'"
-        # Only replace %s that are bind placeholders (not inside strings)
-        return re.sub(r"(?<!')(?<!%)(?<!\w)%s(?!\w)", _repl, sql)
+                result.append(f"'{escaped}'")
+            elif isinstance(val, (int, float)):
+                result.append(str(val))
+            else:
+                result.append(f"'{val}'")
+        result.append(parts[-1])
+        return "".join(result)
 
     # ------------------------------------------------------------------
     # Vector workaround (ArcadeDB Jackson float[] bug)

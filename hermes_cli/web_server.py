@@ -254,6 +254,10 @@ from hermes_cli.memory_oauth import router as _memory_oauth_router  # noqa: E402
 
 app.include_router(_memory_oauth_router)
 
+# OpenAI-compatible API (Phase 9 — for OpenWebUI, etc.)
+from hermes_cli.openai_api import router as _openai_router  # noqa: E402
+app.include_router(_openai_router)
+
 # ---------------------------------------------------------------------------
 # Session token for protecting sensitive endpoints (reveal).
 # The desktop shell mints the token and injects it via

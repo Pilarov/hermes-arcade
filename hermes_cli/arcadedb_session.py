@@ -897,35 +897,54 @@ class ArcadedbSessionDB:
         limit: int = 20, offset: int = 0, sort: Optional[str] = None,
         include_inactive: bool = False,
     ) -> List[Dict[str, Any]]:
-        active_clause = "AND (m.active = 1 OR m.compacted = 1)" if not include_inactive else ""
+        active_clause = "AND (active = 1 OR compacted = 1)" if not include_inactive else ""
+        rows = []
 
-        has_cjk = _has_cjk(query)
+        # TD-22: try vector search first when embedder is available
+        if self._embedder:
+            try:
+                q_emb = self._embedder.embed_query(query)
+                from hermes_cli.arcadedb import ArcadeDBAdapter
+                qv = ArcadeDBAdapter._vec(q_emb.dense)
+                rows = self._adapter.query(
+                    f"SELECT @rid as rid, session_id, role, content, "
+                    "timestamp, tool_name "
+                    "FROM Message "
+                    f"WHERE @rid IN [ expand(`vector.neighbors`('Message[embedding]', {qv}, {limit * 2})) ] "
+                    f"{active_clause} "
+                    f"LIMIT {limit} SKIP {offset}"
+                )
+            except Exception:
+                pass  # fall through to LIKE
 
-        if has_cjk:
-            rows = self._adapter.query(
-                "SELECT @rid as rid, session_id, role, content, "
-                "timestamp, tool_name "
-                "FROM Message "
-                "WHERE (content LIKE %(q)s "
-                "   OR tool_name LIKE %(q)s) "
-                f"{active_clause} "
-                "ORDER BY timestamp DESC, @rid "
-                "LIMIT %(l)s SKIP %(o)s",
-                {"q": f"%{query}%", "l": limit, "o": offset},
-            )
-        else:
-            rows = self._adapter.query(
-                "SELECT session_id, role, content, "
-                "timestamp, tool_name "
-                "FROM Message "
-                "WHERE content LIKE %(q)s "
-                f"{active_clause} "
-                "ORDER BY timestamp DESC "
-                "LIMIT %(l)s SKIP %(o)s",
-                {"q": f"%{query}%", "l": limit, "o": offset},
-            )
+        # LIKE fallback (primary for CJK, secondary for non-embedded)
+        if not rows:
+            has_cjk = _has_cjk(query)
+            if has_cjk:
+                rows = self._adapter.query(
+                    "SELECT @rid as rid, session_id, role, content, "
+                    "timestamp, tool_name "
+                    "FROM Message "
+                    "WHERE (content LIKE %(q)s "
+                    "   OR tool_name LIKE %(q)s) "
+                    f"{active_clause} "
+                    "ORDER BY timestamp DESC, @rid "
+                    "LIMIT %(l)s SKIP %(o)s",
+                    {"q": f"%{query}%", "l": limit, "o": offset},
+                )
+            else:
+                rows = self._adapter.query(
+                    "SELECT session_id, role, content, "
+                    "timestamp, tool_name "
+                    "FROM Message "
+                    "WHERE content LIKE %(q)s "
+                    f"{active_clause} "
+                    "ORDER BY timestamp DESC "
+                    "LIMIT %(l)s SKIP %(o)s",
+                    {"q": f"%{query}%", "l": limit, "o": offset},
+                )
 
-        # Enrich with session metadata (source, model)
+        # Enrich with session metadata
         session_cache = {}
         def _get_session(sid):
             if sid not in session_cache:
