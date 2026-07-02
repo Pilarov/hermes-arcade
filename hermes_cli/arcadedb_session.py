@@ -858,12 +858,12 @@ class ArcadedbSessionDB:
         return result
 
     def clear_messages(self, session_id: str) -> None:
+        # Soft-delete — DELETE VERTEX hangs on edge cascade (TD-4/18)
         self._adapter.execute(
-            "DELETE VERTEX Message WHERE session_id = %s", (session_id,)
+            f"UPDATE Message SET active = 0, compacted = 1 WHERE session_id = {_q(session_id)}"
         )
         self._adapter.execute(
-            "UPDATE Session SET message_count = 0, tool_call_count = 0 WHERE id = %s",
-            (session_id,),
+            f"UPDATE Session SET message_count = 0, tool_call_count = 0 WHERE id = {_q(session_id)}"
         )
 
     def message_count(self, session_id: Optional[str] = None) -> int:
