@@ -158,7 +158,7 @@ class ArcadeDBAdapter:
             except Exception:
                 pass
             cur.close()
-            conn.close()  # discard bad connection
+            conn.close()  # discard bad connection, pool will create fresh one
             raise
 
     # ------------------------------------------------------------------
