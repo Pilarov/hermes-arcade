@@ -408,6 +408,87 @@ class _WriteQueue:
 
 
 # ---------------------------------------------------------------------------
+# ArcadeDB Write Queue (Phase 8.4)
+# ---------------------------------------------------------------------------
+
+class ArcadedbWriteQueue:
+    """ArcadeDB-backed durability queue for RetainDB (replace SQLite _WriteQueue)."""
+
+    def __init__(self, client, adapter):
+        import threading, queue
+        from hermes_cli.arcadedb_helpers import _q, _n, _now
+        self._client = client
+        self._adapter = adapter
+        self._q = _q
+        self._n = _n
+        self._now = _now
+        self._queue = queue.Queue()
+        self._thread = threading.Thread(target=self._loop, name="retaindb-arcadedb", daemon=True)
+        self._thread.start()
+        # Crash recovery: replay pending rows
+        for row in self._pending_rows():
+            self._queue.put(row)
+
+    def enqueue(self, user_id: str, session_id: str, messages: list) -> None:
+        import json, time
+        now = self._now()
+        self._adapter.execute(
+            f"CREATE VERTEX PendingIngest SET "
+            f"user_id = {self._q(user_id)}, session_id = {self._q(session_id)}, "
+            f"messages_json = {self._q(json.dumps(messages))}, "
+            f"created_at = {self._n(now)}"
+        )
+        # Push to in-memory queue for the worker thread
+        row = self._adapter.query(
+            f"SELECT FROM PendingIngest WHERE session_id = {self._q(session_id)} "
+            f"AND created_at = {self._n(now)} LIMIT 1"
+        )
+        if row:
+            self._queue.put(row[0])
+
+    def _pending_rows(self) -> list:
+        """Crash recovery: read all unflushed rows from ArcadeDB."""
+        try:
+            return self._adapter.query("SELECT FROM PendingIngest ORDER BY created_at")
+        except Exception:
+            return []
+
+    def _flush_row(self, row: dict) -> bool:
+        """POST to RetainDB API. On success -> DELETE vertex."""
+        try:
+            import json
+            msgs = json.loads(row.get("messages_json", "[]"))
+            self._client.ingest_session(
+                row.get("user_id", ""),
+                row.get("session_id", ""),
+                msgs,
+            )
+            self._adapter.execute(
+                f"DELETE VERTEX PendingIngest WHERE @rid = {self._q(row['@rid'])}"
+            )
+            return True
+        except Exception as e:
+            self._adapter.execute(
+                f"UPDATE PendingIngest SET last_error = {self._q(str(e)[:500])} "
+                f"WHERE @rid = {self._q(row['@rid'])}"
+            )
+            return False
+
+    def _loop(self) -> None:
+        import time as _time
+        while True:
+            row = self._queue.get()
+            if row is None:  # shutdown sentinel
+                break
+            self._flush_row(row)
+            self._queue.task_done()
+
+    def shutdown(self) -> None:
+        self._queue.put(None)
+        self._thread.join(timeout=10)
+
+
+# ---------------------------------------------------------------------------
 # Overlay formatter
 # ---------------------------------------------------------------------------
 
