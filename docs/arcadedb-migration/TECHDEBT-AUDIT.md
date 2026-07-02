@@ -1,5 +1,38 @@
 # ArcadeDB Migration — Tech Debt Audit (Code Review)
 
+## Second Audit (03.07.2026)
+
+After implementing Blocks 1-7. **Verification against original audit.**
+
+| Verdict | Count | Details |
+|---------|-------|---------|
+| **FIXED** | 12 | AUD-1,2,3,4,5,6,7,9,11,13,29 + NEW-1 |
+| **PARTIAL** | 1 | AUD-8 (claim_handoff — not atomic yet) |
+| **UNCHANGED** | 22 | AUD-10,12,14,15,16,17,18,19,21,22,23,24,25,26,28,30 + LOSS-1..7 |
+| **NEW** | 3 | NEW-2 (lock unused), NEW-3 (LIKE fetch unfiltered), NEW-4 (handoff TOCTOU) |
+
+**Progress: 13/35 fixed (37%)** | **3 new issues** | **Total: 25 remaining**
+
+**Key improvements since first audit:**
+- Schema: all 7 vertex types + 5 properties + dynamic VECTOR_DIM
+- Search: filters working across all paths, OFFSET→SKIP globally
+- Embedding: `_vec()` in memory store, auto-embed on `append_message`
+- Transactions: soft-delete in `clear_messages`, pool lock initialized
+- Kanban: comment edge fixed
+- API: auth with `verify_api_key`
+- Tests: search subsystem now 10/10 (was 0/10); 65/77 overall (84%)
+
+**Largest remaining gaps:**
+1. AUD-10 (rewind @rid) — HIGH: /undo gives wrong range for cross-cluster messages
+2. AUD-14 (pool lock) — HIGH: lock exists but never acquired — false safety
+3. AUD-15 (_fmt_tuple naïve split) — HIGH: %s in string content breaks SQL
+4. AUD-16 (no pruning) — HIGH: VerificationEvent unbounded growth
+5. LOSS-7 (x00json: compat) — HIGH: SQLite data unreadable in ArcadeDB
+
+---
+
+## First Audit (01.07.2026)
+
 Результат ревью всей написанной кодовой базы ArcadeDB-миграции
 (02.07.2026). 37 пунктов, сгруппированных по приоритету и модулю.
 
