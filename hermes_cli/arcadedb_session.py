@@ -46,50 +46,45 @@ from hermes_cli.arcadedb_helpers import (
 logger = logging.getLogger(__name__)
 
 
-# Block 3: Entity extraction (Graph RAG enrichment)
-def _extract_and_link_entities(cur, msg_rid: str, text: str, ts: float) -> None:
-    """Extract named entities from message text and create MENTIONS edges."""
+# Block 3: Entity extraction + graph edges (var B: edges after transact)
+def _extract_entities_from_text(text: str) -> list[str]:
+    """Extract named entities from text. Pure function — no DB access."""
     import re
-    # English capitalized words
     capitalized = set(re.findall(r'\b[A-Z][a-z]{2,}\b', text))
-    # Technical terms
     tech = set(re.findall(
         r'\b(?:kubernetes|docker|nginx|aws|api|cli|sql|http|ssh|git|npm|pip|'
         r'python|java|node|react|vue|linux|bash|ssl|tls|json|xml|html|css|'
         r'postgres|redis|mongo|graphql|grpc|kafka|helm|terraform)\b',
         text, re.IGNORECASE
     ))
-    # Cyrillic capitalized words
     cyrillic = set(re.findall(r'\b[А-Я][а-я]{2,}\b', text))
-    
-    entities = list(capitalized | tech | cyrillic)[:10]
-    if not entities:
-        return
-    
-    entity_rids = []
-    for name in entities:
+    return list(capitalized | tech | cyrillic)[:10]
+
+def _create_entity_vertices(cur, names: list[str], ts: float) -> list[str]:
+    """Create Entity vertices + return their @rids. Must be inside transact."""
+    rids = []
+    for name in names:
         try:
             cur.execute(
                 f"CREATE VERTEX Entity SET name = {_q(name)}, "
                 f"entity_type = 'extracted', created_at = {_n(ts)}"
             )
         except Exception:
-            pass  # Already exists
-        
+            pass
         try:
-            cur.execute(
-                f"SELECT @rid FROM Entity WHERE name = {_q(name)} LIMIT 1"
-            )
+            cur.execute(f"SELECT @rid FROM Entity WHERE name = {_q(name)} LIMIT 1")
             rows = cur.fetchall()
             if rows:
-                entity_rids.append(rows[0]["@rid"])
+                rids.append(rows[0]["@rid"])
         except Exception:
             pass
-    
-    # MENTIONS edges
+    return rids
+
+def _create_graph_edges(adapter, msg_rid: str, entity_rids: list[str]) -> None:
+    """Create MENTIONS + RELATES_TO edges OUTSIDE transaction (ArcadeDB PG workaround)."""
     for erid in entity_rids:
         try:
-            cur.execute(
+            adapter.execute(
                 f"CREATE EDGE MENTIONS FROM "
                 f"(SELECT FROM Message WHERE @rid = {_q(msg_rid)}) TO "
                 f"(SELECT FROM Entity WHERE @rid = {_q(erid)}) "
@@ -97,15 +92,13 @@ def _extract_and_link_entities(cur, msg_rid: str, text: str, ts: float) -> None:
             )
         except Exception:
             pass
-    
-    # RELATES_TO edges between co-occurring entities
-    for i, erid_a in enumerate(entity_rids):
-        for erid_b in entity_rids[i+1:]:
+    for i, a in enumerate(entity_rids):
+        for b in entity_rids[i+1:]:
             try:
-                cur.execute(
+                adapter.execute(
                     f"CREATE EDGE RELATES_TO FROM "
-                    f"(SELECT FROM Entity WHERE @rid = {_q(erid_a)}) TO "
-                    f"(SELECT FROM Entity WHERE @rid = {_q(erid_b)}) "
+                    f"(SELECT FROM Entity WHERE @rid = {_q(a)}) TO "
+                    f"(SELECT FROM Entity WHERE @rid = {_q(b)}) "
                     f"SET weight = 1.0"
                 )
             except Exception:
@@ -638,13 +631,23 @@ class ArcadedbSessionDB:
                     (num_tc, session_id),
                 )
 
-            # Block 3: Extract entities from message content
-            if isinstance(content, str) and len(content) > 10:
-                _extract_and_link_entities(cur, msg_rid, content, ts)
+            # Block 3: Extract entity names from message (create vertices inside transact)
+            entity_rids = []
+            content_str = content if isinstance(content, str) else ""
+            if len(content_str) > 10:
+                entity_names = _extract_entities_from_text(content_str)
+                if entity_names:
+                    entity_rids = _create_entity_vertices(cur, entity_names, ts)
 
-            return _rid_to_int(msg_rid)
+            return _rid_to_int(msg_rid), entity_rids, msg_rid
 
-        return self._adapter.transact(_do)
+        msg_id, entity_rids, msg_rid_val = self._adapter.transact(_do)
+
+        # Block 3 var B: Create MENTIONS/RELATES_TO edges OUTSIDE transaction
+        if entity_rids:
+            _create_graph_edges(self._adapter, msg_rid_val, entity_rids)
+
+        return msg_id
 
     def get_messages(
         self, session_id: str, include_inactive: bool = False,
