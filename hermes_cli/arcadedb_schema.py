@@ -670,6 +670,9 @@ class SchemaManager:
                 kind = idx_def[2]
             else:
                 props_str = idx_def[0]
+                # Handle composite index with metadata: ((prop1, prop2), kind, metadata)
+                if isinstance(props_str, tuple):
+                    props_str = ", ".join(props_str)
                 kind = idx_def[1]
                 metadata = idx_def[2]
         else:
