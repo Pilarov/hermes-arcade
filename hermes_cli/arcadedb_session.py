@@ -977,44 +977,42 @@ class ArcadedbSessionDB:
         profile: Optional[str] = None, days: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         if not self._embedder:
-            # LIKE fallback without embeddings
             return self._adapter.query(
                 f"SELECT FROM SearchMatter "
                 f"WHERE summary LIKE {_q(f'%{query}%')} "
                 f"ORDER BY created_at DESC LIMIT {top_k}"
             )
 
-        q = self._embedder.embed_query(query)
-        params: Dict[str, Any] = {
-            "qv": q.dense,
-            "tk": top_k,
-            "tk2": top_k,
-        }
+        # Compute query embedding — pass as JSON array SQL literal 
+        from hermes_cli.arcadedb import ArcadeDBAdapter
+        q_emb = self._embedder.embed_query(query)
+        qv = ArcadeDBAdapter._vec(q_emb.dense)  # JSON array for SQL
 
         where = ""
+        kw_sql = ""
+        params: Dict[str, Any] = {"tk2": top_k}
+        fulltext_branch = ""
+
+        if keywords:
+            kw_sql = f" WHERE SEARCH_INDEX('SearchMatter[summary]', %(kw)s) = true"
+            params["kw"] = keywords
         if profile:
-            where += " AND profile = %(p)s"
-            params["p"] = profile
+            where += f" AND profile = {_q(profile)}"
         if days is not None:
             cutoff = _now() - days * 86400
-            where += " AND created_at >= %(cut)s"
-            params["cut"] = cutoff
+            where += f" AND created_at >= {_n(cutoff)}"
+
+        if keywords:
+            fulltext_branch = f"    (SELECT @rid FROM SearchMatter{kw_sql}{where}),\n"
+        elif where.strip():
+            fulltext_branch = f"    (SELECT @rid FROM SearchMatter WHERE 1=1{where}),\n"
+        else:
+            fulltext_branch = "    (SELECT @rid FROM SearchMatter),\n"
 
         sql = (
             "SELECT expand(`vector.fuse`(\n"
-            "    `vector.neighbors`('SearchMatter[embedding]', %(qv)s, %(tk)s),\n"
-        )
-        if keywords:
-            kw_filter = (
-                " WHERE SEARCH_INDEX('SearchMatter[summary]', %(kw)s) = true" + where
-            )
-            params["kw"] = keywords
-            sql += f"    (SELECT @rid FROM SearchMatter{kw_filter}),\n"
-        elif where.strip():
-            sql += f"    (SELECT @rid FROM SearchMatter WHERE 1=1{where}),\n"
-        else:
-            sql += "    (SELECT @rid FROM SearchMatter),\n"
-        sql += (
+            f"    `vector.neighbors`('SearchMatter[embedding]', {qv}, {top_k}),\n"
+            f"{fulltext_branch}"
             "    { fusion: 'RRF', groupBy: 'session_rid', groupSize: 1 }\n"
             ")) LIMIT %(tk2)s"
         )
