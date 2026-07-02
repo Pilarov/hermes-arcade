@@ -201,9 +201,10 @@ def create_embedder(config: Optional[Dict[str, Any]] = None) -> EmbedderProvider
     if provider_name == "ollama":
         import os
         base_url = config.get("base_url", "http://localhost:11434/v1")
+        api_key = config.get("api_key") or os.environ.get("OPENAI_API_KEY") or "ollama"
         return OpenAIEmbedder(
             model_name=config.get("model", "nomic-embed-text"),
-            api_key="ollama",
+            api_key=api_key,
             base_url=base_url,
         )
 
