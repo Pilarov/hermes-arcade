@@ -92,12 +92,9 @@ class TestQueryMethods:
         except: pass
 
     def test_execute_insert(self, arcadedb_adapter):
-        arcadedb_adapter.execute(
-            f"CREATE VERTEX TestQ SET name = {_q('insert-ok')}"
-        )
-        rows = arcadedb_adapter.query(
-            f"SELECT FROM TestQ WHERE name = {_q('insert-ok')}"
-        )
+        uid = f"iok-{id(self)}"
+        arcadedb_adapter.execute(f"CREATE VERTEX TestQ SET name = {_q(uid)}")
+        rows = arcadedb_adapter.query(f"SELECT FROM TestQ WHERE name = {_q(uid)}")
         assert len(rows) == 1
 
     def test_query_select(self, arcadedb_adapter):
