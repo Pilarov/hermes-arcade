@@ -1138,7 +1138,7 @@ class ArcadedbSessionDB:
 
     def get_meta(self, key: str) -> Optional[str]:
         rows = self._adapter.query(
-            "SELECT value FROM StateMeta WHERE key = %s", (key,)
+            "SELECT value FROM StateMeta WHERE key = %s ORDER BY @rid DESC LIMIT 1", (key,)
         )
         return rows[0].get("value") if rows else None
 

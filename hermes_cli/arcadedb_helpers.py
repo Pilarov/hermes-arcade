@@ -15,7 +15,7 @@ import re
 import time
 from typing import Any, Optional
 
-_CONTENT_JSON_PREFIX = "\x00json:"
+_CONTENT_JSON_PREFIX = "__JSON__:"
 MAX_TITLE_LENGTH = 100
 
 # Session sources excluded from browsing/searching by default.
@@ -146,9 +146,6 @@ def _q(val) -> str:
     if val is None:
         return "NULL"
     if isinstance(val, str):
-        # Strip null bytes (ArcadeDB PG protocol can't handle \x00)
-        val = val.replace("\x00", "")
-        # Escape backslash first, then single quote
         escaped = val.replace("\\", "\\\\").replace("'", "\\'")
         return f"'{escaped}'"
     if isinstance(val, (int, float)):
