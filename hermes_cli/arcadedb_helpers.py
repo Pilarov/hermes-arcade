@@ -53,8 +53,12 @@ def _decode_content(content: Optional[str]) -> Any:
     """
     if content is None:
         return None
-    if isinstance(content, str) and content.startswith(_CONTENT_JSON_PREFIX):
-        return json.loads(content[len(_CONTENT_JSON_PREFIX):])
+    if isinstance(content, str):
+        if content.startswith(_CONTENT_JSON_PREFIX):
+            return json.loads(content[len(_CONTENT_JSON_PREFIX):])
+        # LOSS-7: compatibility with legacy SQLite \x00json: prefix
+        if content.startswith("\x00json:"):
+            return json.loads(content[6:])
     return content
 
 

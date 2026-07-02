@@ -801,6 +801,11 @@ class ArcadedbSessionDB:
                     f"finish_reason = {_q(msg.get('finish_reason'))}, "
                     f"reasoning = {_q(msg.get('reasoning'))}, "
                     f"reasoning_content = {_q(msg.get('reasoning_content'))}, "
+                    f"platform_message_id = {_q(msg.get('platform_message_id'))}, "
+                    f"reasoning_details = {_q(msg.get('reasoning_details'))}, "
+                    f"codex_reasoning_items = {_q(msg.get('codex_reasoning_items'))}, "
+                    f"codex_message_items = {_q(msg.get('codex_message_items'))}, "
+                    f"observed = {1 if msg.get('observed') else 0}, "
                     "active = 1"
                 )
                 new_msg_count += 1

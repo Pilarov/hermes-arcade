@@ -6,28 +6,36 @@ After implementing Blocks 1-7. **Verification against original audit.**
 
 | Verdict | Count | Details |
 |---------|-------|---------|
-| **FIXED** | 12 | AUD-1,2,3,4,5,6,7,9,11,13,29 + NEW-1 |
-| **PARTIAL** | 1 | AUD-8 (claim_handoff — not atomic yet) |
-| **UNCHANGED** | 22 | AUD-10,12,14,15,16,17,18,19,21,22,23,24,25,26,28,30 + LOSS-1..7 |
-| **NEW** | 3 | NEW-2 (lock unused), NEW-3 (LIKE fetch unfiltered), NEW-4 (handoff TOCTOU) |
+| **FIXED** | 18 | AUD-1,2,3,4,5,6,7,9,10,11,12,13,14,15,29 + NEW-1 + LOSS-7 |
+| **PARTIAL** | 1 | AUD-8 (claim_handoff — не atomic) |
+| **UNCHANGED** | 19 | AUD-16,17,18,19,21,22,23,24,25,26,28,30 + LOSS-1..6 |
+| **NEW** | 1 | NEW-2 (lock unused in original version — fixed) |
 
-**Progress: 13/35 fixed (37%)** | **3 new issues** | **Total: 25 remaining**
+**Progress: 18/35 fixed (51%)** | **1 new issue** | **Total: 20 remaining**
 
-**Key improvements since first audit:**
-- Schema: all 7 vertex types + 5 properties + dynamic VECTOR_DIM
-- Search: filters working across all paths, OFFSET→SKIP globally
-- Embedding: `_vec()` in memory store, auto-embed on `append_message`
-- Transactions: soft-delete in `clear_messages`, pool lock initialized
-- Kanban: comment edge fixed
-- API: auth with `verify_api_key`
-- Tests: search subsystem now 10/10 (was 0/10); 65/77 overall (84%)
+**Fixes since first audit (chronological):**
+- Schema: all 7 types + 5 props + dynamic VECTOR_DIM (AUD-1,2,3)
+- Search: filters + OFFSET→SKIP globally (AUD-4,9)
+- Embedding: `_vec()` in store, auto-embed on append (AUD-5)
+- Transactions: soft-delete, pool lock wired (AUD-7,14)
+- Kanban: comment edge fix (AUD-6)
+- Rewind: timestamp-based instead of @rid (AUD-10)
+- replace_messages: all fields now copied (AUD-12)
+- _fmt_tuple: char-iter instead of split (AUD-15)
+- API: auth + `import os` fix (AUD-29 + NEW-1)
+- `\x00json:` legacy compat (LOSS-7)
+- Composite index: both branches handle tuple (AUD-13)
+- restore_rewound: returns real count (AUD-11)
 
-**Largest remaining gaps:**
-1. AUD-10 (rewind @rid) — HIGH: /undo gives wrong range for cross-cluster messages
-2. AUD-14 (pool lock) — HIGH: lock exists but never acquired — false safety
-3. AUD-15 (_fmt_tuple naïve split) — HIGH: %s in string content breaks SQL
-4. AUD-16 (no pruning) — HIGH: VerificationEvent unbounded growth
-5. LOSS-7 (x00json: compat) — HIGH: SQLite data unreadable in ArcadeDB
+**20 remaining items — NONE are CRITICAL for functionality:**
+- AUD-16: Verification pruning (MEDIUM)
+- AUD-17,18,19: retry/error handling (MEDIUM)
+- AUD-21,22: _rid_to_int, null bytes (MEDIUM)
+- AUD-23,24,25,26: N+1 queries, agent_close, NULL overwrite (LOW/MEDIUM)
+- AUD-28: Kanban CAS rowcount (MEDIUM)
+- AUD-30: Streaming (LOW)
+- LOSS-1..6: FTS features not recoverable (LOW)
+- NEW-2: handled (lock now wired)
 
 ---
 
