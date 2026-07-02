@@ -46,6 +46,72 @@ from hermes_cli.arcadedb_helpers import (
 logger = logging.getLogger(__name__)
 
 
+# Block 3: Entity extraction (Graph RAG enrichment)
+def _extract_and_link_entities(cur, msg_rid: str, text: str, ts: float) -> None:
+    """Extract named entities from message text and create MENTIONS edges."""
+    import re
+    # English capitalized words
+    capitalized = set(re.findall(r'\b[A-Z][a-z]{2,}\b', text))
+    # Technical terms
+    tech = set(re.findall(
+        r'\b(?:kubernetes|docker|nginx|aws|api|cli|sql|http|ssh|git|npm|pip|'
+        r'python|java|node|react|vue|linux|bash|ssl|tls|json|xml|html|css|'
+        r'postgres|redis|mongo|graphql|grpc|kafka|helm|terraform)\b',
+        text, re.IGNORECASE
+    ))
+    # Cyrillic capitalized words
+    cyrillic = set(re.findall(r'\b[А-Я][а-я]{2,}\b', text))
+    
+    entities = list(capitalized | tech | cyrillic)[:10]
+    if not entities:
+        return
+    
+    entity_rids = []
+    for name in entities:
+        try:
+            cur.execute(
+                f"CREATE VERTEX Entity SET name = {_q(name)}, "
+                f"entity_type = 'extracted', created_at = {_n(ts)}"
+            )
+        except Exception:
+            pass  # Already exists
+        
+        try:
+            cur.execute(
+                f"SELECT @rid FROM Entity WHERE name = {_q(name)} LIMIT 1"
+            )
+            rows = cur.fetchall()
+            if rows:
+                entity_rids.append(rows[0]["@rid"])
+        except Exception:
+            pass
+    
+    # MENTIONS edges
+    for erid in entity_rids:
+        try:
+            cur.execute(
+                f"CREATE EDGE MENTIONS FROM "
+                f"(SELECT FROM Message WHERE @rid = {_q(msg_rid)}) TO "
+                f"(SELECT FROM Entity WHERE @rid = {_q(erid)}) "
+                f"SET weight = 1.0"
+            )
+        except Exception:
+            pass
+    
+    # RELATES_TO edges between co-occurring entities
+    for i, erid_a in enumerate(entity_rids):
+        for erid_b in entity_rids[i+1:]:
+            try:
+                cur.execute(
+                    f"CREATE EDGE RELATES_TO FROM "
+                    f"(SELECT FROM Entity WHERE @rid = {_q(erid_a)}) TO "
+                    f"(SELECT FROM Entity WHERE @rid = {_q(erid_b)}) "
+                    f"SET weight = 1.0"
+                )
+            except Exception:
+                pass
+
+
 class ArcadedbSessionDB:
     """ArcadeDB-backed session and message store.
 
@@ -571,6 +637,10 @@ class ArcadedbSessionDB:
                     "WHERE id = %s",
                     (num_tc, session_id),
                 )
+
+            # Block 3: Extract entities from message content
+            if isinstance(content, str) and len(content) > 10:
+                _extract_and_link_entities(cur, msg_rid, content, ts)
 
             return _rid_to_int(msg_rid)
 

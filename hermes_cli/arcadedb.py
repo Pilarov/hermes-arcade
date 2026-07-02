@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -58,6 +59,7 @@ class ArcadeDBAdapter:
     def __init__(self, config: Optional[ArcadeDBConfig] = None) -> None:
         self._cfg = config or ArcadeDBConfig()
         self._pool: Optional[ConnectionPool] = None
+        self._lock = threading.RLock()  # TD-2/AUD-14: thread-safe pool access
 
     # ------------------------------------------------------------------
     # Lifecycle
