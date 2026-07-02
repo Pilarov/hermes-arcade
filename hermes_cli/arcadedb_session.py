@@ -928,7 +928,8 @@ class ArcadedbSessionDB:
                     "timestamp, tool_name "
                     "FROM Message "
                     f"WHERE @rid IN [ expand(`vector.neighbors`('Message[embedding]', {qv}, {limit * 2})) ] "
-                    f"{active_clause} "
+                    f"{active_clause}{filter_clause} "
+                    f"ORDER BY {sort_clause} "
                     f"LIMIT {limit} SKIP {offset}"
                 )
             except Exception:
@@ -961,7 +962,7 @@ class ArcadedbSessionDB:
                     {"q": f"%{query}%", "l": limit, "o": offset},
                 )
 
-        # Enrich with session metadata
+        # Enrich with session metadata + apply source/role filters (Block 2)
         session_cache = {}
         def _get_session(sid):
             if sid not in session_cache:
@@ -974,11 +975,20 @@ class ArcadedbSessionDB:
 
         results: List[Dict] = []
         for r in rows:
+            sid = r.get("session_id")
+            s = _get_session(sid)
+            
+            # Apply filters at application level (source/role not joinable in ArcadeDB)
+            if source_filter and s.get("source") != source_filter:
+                continue
+            if exclude_sources and s.get("source") in exclude_sources:
+                continue
+            if role_filter and r.get("role") != role_filter:
+                continue
+                
             content = _decode_content(r.get("content"))
             content_str = str(content) if content else ""
             snippet = self._build_snippet(content_str, query)
-            sid = r.get("session_id")
-            s = _get_session(sid)
             results.append({
                 "id": _rid_to_int(str(r.get("@rid", r.get("rid", "")))),
                 "session_id": sid,
@@ -990,6 +1000,13 @@ class ArcadedbSessionDB:
                 "model": s.get("model"),
                 "session_started": s.get("started_at"),
             })
+        
+        # Apply sort
+        if sort == "oldest":
+            results.sort(key=lambda x: x.get("timestamp", 0))
+        elif sort == "newest":
+            results.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+            
         return results
 
     def _build_snippet(self, content: str, query: str) -> str:
