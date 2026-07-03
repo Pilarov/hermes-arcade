@@ -13,15 +13,15 @@ API сервер для OpenWebUI запущен.
 | 2 | 26.7.1 | 48/59 (81%) | `vector.fuse()` заработал, уникальные ID в тестах |
 | 3 | 26.7.1 | 47/59 (80%) | `transact()` свежие соединения (не пул), `autocommit=True` подтверждён |
 
-### Финальный прогон (pool reset, без HTTP)
+### Финальный прогон (HTTP-only adapter, 26.7.1)
 
 ```
 Адаптер + фабрика:       15 pass / 0 fail  ✅
-Compression locks:        5 pass / 3 fail  (duplicate key — смежные тесты)
-Search:                   7 pass / 2 fail  (search_basic, hybrid_basic — пустые результаты)
-E2E:                      23 pass / 4 fail (pool corruption)
+Compression locks:        4 pass / 4 fail  (CAS не атомарен — execute_strict)
+Search:                   8 pass / 1 fail  (hybrid_basic — vector.neighbors сломан)
+E2E:                      25 pass / 2 fail (compression lock CAS)
 ─────────────────────────────────────────────────
-ИТОГО:                   50 pass / 9 fail (85%)
+ИТОГО:                   52 pass / 7 fail (88%)
 ```
 
 ### Три стратегии — итоги
