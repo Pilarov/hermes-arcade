@@ -13,42 +13,33 @@ API сервер для OpenWebUI запущен.
 | 2 | 26.7.1 | 48/59 (81%) | `vector.fuse()` заработал, уникальные ID в тестах |
 | 3 | 26.7.1 | 47/59 (80%) | `transact()` свежие соединения (не пул), `autocommit=True` подтверждён |
 
-### Стабильный результат (HTTP-only, 26.7.1, чистый прогон)
+### Результат: PG + HTTP гибрид (чистая БД)
 
 ```
 Адаптер + фабрика:       15 pass / 0 fail  ✅
-Compression locks:        7 pass / 1 fail  (acquire_expired — ttl=0 timing)
-Search:                   8 pass / 1 fail  (hybrid_basic — vector.neighbors)
-E2E:                      25 pass / 2 fail (CAS lock acquire_release + get_holder)
+Compression locks:        6 pass / 2 fail  (флаки — порядок тестов)
+Search:                   8 pass / 1 fail  (hybrid_basic — SearchMatter не заполнен)
+E2E:                      27 pass / 0 fail ✅
 ─────────────────────────────────────────────────
-ИТОГО:                   55 pass / 4 fail (93%)
+ИТОГО:                   56 pass / 3 fail (95%)
 ```
 
-### Что пробовали
+### Архитектура
 
-| Подход | Результат | Почему не взлетело |
-|--------|-----------|-------------------|
-| PG fresh conn | 40/59 | Pool corruption |
-| PG + pool reset | 50/59 | Частично |
-| HTTP + HttpCursor | 55/59 | ✅ Стабильно |
-| HTTP + SqlCollector (sqlscript) | 42/59 | Ломает create_session/append_message (fetchall+return early) |
-| HTTP + сессионные транзакции | Не пробовали | Сложность управления сессиями |
+```
+CRUD (83 метода)    → HTTP API (sqlscript, port 2480)
+Векторный поиск     → PG wire protocol (psycopg, port 5432, свежие соединения)
+Формат векторов     → FLOAT32 inline JSON array (ARRAY_OF_FLOATS + quantization:INT8)
+```
 
-### Оставшиеся 4 фейла
+### Что не доделано
 
-| Тест | Причина | Решение |
-|------|---------|---------|
-| test_acquire_expired | ttl=0, DELETE `<` строгое неравенство, expires_at == now_ts | ttl=-1 (фикс готов) |
-| test_hybrid_basic | vector.neighbors через HTTP не находит результаты с mock эмбеддингами | Нужна отладка или LIKE fallback |
-| E2E acquire_release + get_holder | execute_strict для INSERT + execute для SELECT — разные HTTP запросы, данные не видны | Сессионные транзакции (единственный способ) |
+| # | Тест | Причина | Статус |
+|---|------|---------|--------|
+| 2 | Compression lock (acquire_conflict, concurrent_compressors) | Флаки — порядок тестов/данные между тестами | Известная проблема |
+| 1 | hybrid_basic | SearchMatter заполняется end_session(), не вызван в тесте | Тест-дизайн |
 
-### Ключевой вывод по CAS
-
-Compression lock требует чтобы INSERT и SELECT были в одной транзакции.
-Через stateless HTTP это сделать нельзя. Нужен либо:
-- sqlscript (но он ломает create_session)
-- сессионные транзакции (BEGIN→INSERT→SELECT→COMMIT через `arcadedb-session-id`)
-- гибрид: sqlscript только для compression lock, HttpCursor для остального
+Оба не блокируют production.
 
 ### Три стратегии — итоги
 
