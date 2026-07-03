@@ -1012,15 +1012,22 @@ class ArcadedbSessionDB:
                     {"q": f"%{query}%", "l": limit, "o": offset},
                 )
             else:
+                # Split multi-word query into individual LIKE clauses
+                words = [w for w in query.split() if len(w) > 2]
+                if not words:
+                    words = [query]
+                like_clauses = " OR ".join(
+                    f"content LIKE {_q(f'%{w}%')}" for w in words
+                )
                 rows = self._adapter.query(
                     "SELECT @rid as rid, session_id, role, content, "
                     "timestamp, tool_name "
                     "FROM Message "
-                    "WHERE content LIKE %(q)s "
+                    f"WHERE ({like_clauses}) "
                     f"{active_clause} "
                     "ORDER BY timestamp DESC "
                     "LIMIT %(l)s SKIP %(o)s",
-                    {"q": f"%{query}%", "l": limit, "o": offset},
+                    {"l": limit, "o": offset},
                 )
 
         # Enrich with session metadata + apply source/role filters (Block 2)
