@@ -1024,7 +1024,7 @@ class ArcadedbSessionDB:
                 )
             else:
                 rows = self._adapter.query(
-                    "SELECT session_id, role, content, "
+                    "SELECT @rid as rid, session_id, role, content, "
                     "timestamp, tool_name "
                     "FROM Message "
                     "WHERE content LIKE %(q)s "
