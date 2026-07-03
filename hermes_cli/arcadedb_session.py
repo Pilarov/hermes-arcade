@@ -994,16 +994,15 @@ class ArcadedbSessionDB:
             try:
                 q_emb = self._embedder.embed_query(query)
                 from hermes_cli.arcadedb import ArcadeDBAdapter
-                qv_marker = ArcadeDBAdapter._vec_to_bytes(q_emb.dense)
-                rows = self._adapter.query(
+                qv = ArcadeDBAdapter._vec(q_emb.dense)
+                rows = self._adapter.pg_query(
                     f"SELECT @rid as rid, session_id, role, content, "
                     "timestamp, tool_name "
                     "FROM Message "
-                    f"WHERE @rid IN [ expand(vector.neighbors('Message[embedding]', :qv, {limit * 2})) ] "
+                    f"WHERE @rid IN [ expand(vector.neighbors('Message[embedding]', {qv}, {limit * 2})) ] "
                     f"{active_clause}{filter_clause} "
                     f"ORDER BY {sort_clause} "
-                    f"LIMIT {limit} SKIP {offset}",
-                    {"qv": qv_marker},
+                    f"LIMIT {limit} SKIP {offset}"
                 )
             except Exception:
                 pass  # fall through to LIKE
@@ -1116,18 +1115,18 @@ class ArcadedbSessionDB:
                 f"ORDER BY created_at DESC LIMIT {top_k}"
             )
 
-        # Compute query embedding via $bytes typed marker (HTTP API, v26.5.1+)
+        # Compute query embedding via inline JSON array (PG wire protocol)
         from hermes_cli.arcadedb import ArcadeDBAdapter
         q_emb = self._embedder.embed_query(query)
-        qv_marker = ArcadeDBAdapter._vec_to_bytes(q_emb.dense)
+        qv = ArcadeDBAdapter._vec(q_emb.dense)
 
         where = ""
         kw_sql = ""
-        params: Dict[str, Any] = {"qv": qv_marker, "tk2": top_k}
+        params: Dict[str, Any] = {}
         fulltext_branch = ""
 
         if keywords:
-            kw_sql = f" WHERE SEARCH_INDEX('SearchMatter[summary]', %(kw)s) = true"
+            kw_sql = " WHERE SEARCH_INDEX('SearchMatter[summary]', %(kw)s) = true"
             params["kw"] = keywords
         if profile:
             where += f" AND profile = {_q(profile)}"
@@ -1144,13 +1143,13 @@ class ArcadedbSessionDB:
 
         sql = (
             "SELECT expand(vector.fuse(\n"
-            f"    `vector.neighbors`('SearchMatter[embedding]', :qv, {top_k}),\n"
+            f"    `vector.neighbors`('SearchMatter[embedding]', {qv}, {top_k}),\n"
             f"{fulltext_branch}"
             "    { fusion: 'RRF', groupBy: 'session_rid', groupSize: 1 }\n"
-            ")) LIMIT %(tk2)s"
+            f")) LIMIT {top_k}"
         )
 
-        return self._adapter.query(sql, params)
+        return self._adapter.pg_query(sql, params)
 
     # ==================================================================
     # Compression Locks

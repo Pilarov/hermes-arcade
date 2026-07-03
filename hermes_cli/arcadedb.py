@@ -25,13 +25,14 @@ import base64
 import json
 import logging
 import re
-import struct
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import httpx
+import psycopg
+from psycopg.rows import dict_row
 
 logger = logging.getLogger(__name__)
 
@@ -177,15 +178,11 @@ class ArcadeDBAdapter:
 
     def _http_send(
         self, sql: str, ignore_already_errors: bool = True,
-        params: Optional[dict] = None,
     ) -> List[Dict[str, Any]]:
         client = self._http_client()
-        body: dict = {"language": "sql", "command": sql}
-        if params:
-            body["params"] = params
         resp = client.post(
             f"/api/v1/command/{self._cfg.database}",
-            json=body,
+            json={"language": "sql", "command": sql},
             headers={"Authorization": f"Basic {self._http_auth()}"},
         )
         if resp.status_code >= 400:
@@ -306,34 +303,19 @@ class ArcadeDBAdapter:
         params=None,
         language: str = "sql",
     ) -> List[Dict[str, Any]]:
-        """Execute SQL via HTTP. Dict params with $bytes/$int8 typed markers
-        are sent as named HTTP parameters (:name in SQL). Regular params
-        are formatted via _fmt()/_fmt_tuple().
-        """
-        http_params: Optional[dict] = None
-        fmt_params: dict = {}
+        """Execute a SQL command via HTTP API.
 
+        Dict/tuple params are auto-converted to string formatting (_fmt).
+        """
         if isinstance(params, dict):
-            for k, v in params.items():
-                if isinstance(v, dict) and any(
-                    mk in v for mk in ("$bytes", "$int8")
-                ):
-                    if http_params is None:
-                        http_params = {}
-                    http_params[k] = v
-                else:
-                    fmt_params[k] = v
-            if fmt_params:
-                sql = self._fmt(sql, fmt_params)
+            sql = self._fmt(sql, params)
         elif isinstance(params, (tuple, list)):
             sql = self._fmt_tuple(sql, params)
 
         if language == "cypher":
             sql = "{cypher} " + sql
 
-        return self._http_send(
-            sql, ignore_already_errors=True, params=http_params,
-        )
+        return self._http_execute(sql)
 
     def query(
         self,
@@ -408,19 +390,36 @@ class ArcadeDBAdapter:
         """Parse JSON-array SQL literal back to List[float]."""
         return json.loads(s)
 
-    @staticmethod
-    def _vec_to_bytes(vec: List[float]) -> Dict[str, str]:
-        """Quantize float32 vector to int8 and return $bytes typed marker.
+    # ------------------------------------------------------------------
+    # PG protocol — vector search only (read-only, no pool corruption)
+    # ------------------------------------------------------------------
 
-        ArcadeDB HTTP API with encoding='INT8' expects one byte per
-        dimension (range [-128, 127], calibrated as value/127.0).
-        Float values are clamped to [-1, 1] before quantization.
+    def pg_query(self, sql: str, params=None) -> List[Dict[str, Any]]:
+        """Execute a read-only query via PG wire protocol.
+
+        Uses a fresh psycopg connection (no pool) for vector search
+        queries (vector.neighbors, vector.fuse). PG handles large
+        inline float arrays correctly, unlike HTTP API.
         """
-        packed = struct.pack(
-            f'{len(vec)}b',
-            *[max(-128, min(127, int(x * 127))) for x in vec],
+        conn = psycopg.connect(
+            host=self._cfg.host, port=self._cfg.port,
+            dbname=self._cfg.database,
+            user=self._cfg.user, password=self._cfg.password,
+            connect_timeout=5, sslmode="disable",
+            autocommit=True, row_factory=dict_row,
         )
-        return {"$bytes": base64.b64encode(packed).decode()}
+        cur = conn.cursor()
+        try:
+            cur.execute(sql, params or {})
+            try:
+                if cur.description is not None:
+                    return [dict(r) for r in cur.fetchall()]
+                return []
+            except Exception:
+                return []
+        finally:
+            cur.close()
+            conn.close()
 
     # ------------------------------------------------------------------
     # Retry helper
