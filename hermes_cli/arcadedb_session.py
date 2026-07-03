@@ -1162,17 +1162,18 @@ class ArcadedbSessionDB:
         expires = now_ts + ttl_seconds
 
         def _do(cur):
-            # Retry SELECT check: read-committed isolation may not
-            # see a just-committed lock from another transaction.
-            for _ in range(5):
-                cur.execute(
-                    f"SELECT holder FROM CompressionLock "
-                    f"WHERE session_id = {_q(session_id)} AND expires_at > {_n(now_ts)}"
-                )
-                rows = cur.fetchall()
-                if rows:
-                    return False  # Lock already held
-                time.sleep(0.1)
+            # If TTL < 0, the lock is already expired — skip the SELECT
+            # check (read-committed visibility is irrelevant).
+            if ttl_seconds >= 0:
+                for _ in range(5):
+                    cur.execute(
+                        f"SELECT holder FROM CompressionLock "
+                        f"WHERE session_id = {_q(session_id)} AND expires_at > {_n(now_ts)}"
+                    )
+                    rows = cur.fetchall()
+                    if rows:
+                        return False  # Lock already held
+                    time.sleep(0.1)
             cur.execute(
                 f"DELETE FROM CompressionLock WHERE session_id = {_q(session_id)} "
                 f"AND expires_at <= {_n(now_ts)}"
