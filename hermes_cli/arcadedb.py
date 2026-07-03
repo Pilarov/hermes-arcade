@@ -101,8 +101,22 @@ class ArcadeDBAdapter:
             if self._connected:
                 return
             self._http_client()
+            self._ensure_database()
             self._check_health()
             self._connected = True
+
+    def _ensure_database(self) -> None:
+        """Create database via HTTP if it doesn't exist (idempotent)."""
+        try:
+            client = self._http_client()
+            auth = self._http_auth()
+            client.post(
+                "/api/v1/server",
+                json={"command": f"create database {self._cfg.database}"},
+                headers={"Authorization": f"Basic {auth}"},
+            )
+        except Exception:
+            pass  # Database may already exist
 
     def close(self) -> None:
         with self._lock:
@@ -148,7 +162,21 @@ class ArcadeDBAdapter:
             json={"language": "sql", "command": sql},
             headers={"Authorization": f"Basic {self._http_auth()}"},
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            detail = ""
+            try:
+                body = resp.json()
+                detail = body.get("detail", "")
+            except Exception:
+                detail = resp.text
+            # Ignore "already exists" — idempotent schema creation
+            if any(marker in detail for marker in (
+                "already exists", "already defined", "already assigned",
+            )):
+                return []
+            raise ArcadeDBError(
+                f"HTTP {resp.status_code}: {detail or resp.text[:200]}"
+            )
         data = resp.json()
         if data.get("result"):
             result = data["result"]
