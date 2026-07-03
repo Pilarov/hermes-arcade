@@ -990,22 +990,11 @@ class ArcadedbSessionDB:
             sort_clause = "timestamp ASC"
 
         rows = []
-        if self._embedder:
-            try:
-                q_emb = self._embedder.embed_query(query)
-                from hermes_cli.arcadedb import ArcadeDBAdapter
-                qv = ArcadeDBAdapter._vec(q_emb.dense)
-                rows = self._adapter.query(
-                    f"SELECT @rid as rid, session_id, role, content, "
-                    "timestamp, tool_name "
-                    "FROM Message "
-                    f"WHERE @rid IN [ vector.neighbors('Message[embedding]', {qv}, {limit * 2}) ] "
-                    f"{active_clause}{filter_clause} "
-                    f"ORDER BY {sort_clause} "
-                    f"LIMIT {limit} SKIP {offset}"
-                )
-            except Exception:
-                pass  # fall through to LIKE
+        # Skip vector.neighbors — HTTP API serializes vectors differently,
+        # and `expand()` is OrientDB-only syntax. Always use LIKE fallback.
+        #
+        # TODO: restore vector search when HTTP API supports `vector.neighbors`
+        #       with proper vector serialization.
 
         # LIKE fallback (primary for CJK, secondary for non-embedded)
         if not rows:
@@ -1160,19 +1149,11 @@ class ArcadedbSessionDB:
                 f"AND expires_at < {_n(now_ts)}"
             )
             try:
-                # Use strict mode to catch duplicate key via ArcadeDBError
-                if hasattr(cur, 'execute_strict'):
-                    cur.execute_strict(
-                        f"INSERT INTO CompressionLock SET "
-                        f"session_id = {_q(session_id)}, holder = {_q(holder)}, "
-                        f"acquired_at = {_n(now_ts)}, expires_at = {_n(expires)}"
-                    )
-                else:
-                    cur.execute(
-                        f"INSERT INTO CompressionLock SET "
-                        f"session_id = {_q(session_id)}, holder = {_q(holder)}, "
-                        f"acquired_at = {_n(now_ts)}, expires_at = {_n(expires)}"
-                    )
+                cur.execute_strict(
+                    f"INSERT INTO CompressionLock SET "
+                    f"session_id = {_q(session_id)}, holder = {_q(holder)}, "
+                    f"acquired_at = {_n(now_ts)}, expires_at = {_n(expires)}"
+                )
             except ArcadeDBError:
                 return False
             cur.execute(
