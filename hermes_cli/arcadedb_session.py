@@ -990,8 +990,23 @@ class ArcadedbSessionDB:
             sort_clause = "timestamp ASC"
 
         rows = []
-        # Skip vector.neighbors — HTTP API cannot serialize 1024d float arrays
-        # inline (body size / parsing issue). Always use LIKE fallback.
+        if self._embedder:
+            try:
+                q_emb = self._embedder.embed_query(query)
+                from hermes_cli.arcadedb import ArcadeDBAdapter
+                qv_marker = ArcadeDBAdapter._vec_to_bytes(q_emb.dense)
+                rows = self._adapter.query(
+                    f"SELECT @rid as rid, session_id, role, content, "
+                    "timestamp, tool_name "
+                    "FROM Message "
+                    f"WHERE @rid IN [ expand(vector.neighbors('Message[embedding]', :qv, {limit * 2})) ] "
+                    f"{active_clause}{filter_clause} "
+                    f"ORDER BY {sort_clause} "
+                    f"LIMIT {limit} SKIP {offset}",
+                    {"qv": qv_marker},
+                )
+            except Exception:
+                pass  # fall through to LIKE
 
         # LIKE fallback (primary for CJK, secondary for non-embedded)
         if not rows:
@@ -1101,14 +1116,14 @@ class ArcadedbSessionDB:
                 f"ORDER BY created_at DESC LIMIT {top_k}"
             )
 
-        # Compute query embedding — pass as JSON array SQL literal 
+        # Compute query embedding via $bytes typed marker (HTTP API, v26.5.1+)
         from hermes_cli.arcadedb import ArcadeDBAdapter
         q_emb = self._embedder.embed_query(query)
-        qv = ArcadeDBAdapter._vec(q_emb.dense)  # JSON array for SQL
+        qv_marker = ArcadeDBAdapter._vec_to_bytes(q_emb.dense)
 
         where = ""
         kw_sql = ""
-        params: Dict[str, Any] = {"tk2": top_k}
+        params: Dict[str, Any] = {"qv": qv_marker, "tk2": top_k}
         fulltext_branch = ""
 
         if keywords:
@@ -1129,7 +1144,7 @@ class ArcadedbSessionDB:
 
         sql = (
             "SELECT expand(vector.fuse(\n"
-            f"    `vector.neighbors`('SearchMatter[embedding]', {qv}, {top_k}),\n"
+            f"    `vector.neighbors`('SearchMatter[embedding]', :qv, {top_k}),\n"
             f"{fulltext_branch}"
             "    { fusion: 'RRF', groupBy: 'session_rid', groupSize: 1 }\n"
             ")) LIMIT %(tk2)s"

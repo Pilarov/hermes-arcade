@@ -153,7 +153,7 @@ VERTICES: Dict[str, Dict[str, Any]] = {
             ("observed", "INTEGER", "DEFAULT 0"),
             ("active", "INTEGER", "DEFAULT 1"),
             ("compacted", "INTEGER", "DEFAULT 0"),
-            ("embedding", f"LIST(EXTERNAL true)"),
+            ("embedding", "BINARY(EXTERNAL true)"),
             ("entity_names", "LIST"),
             # Phase 3: session_id for direct lookup (enables index scans
             # without traversing HAS_MESSAGE edges).
@@ -167,7 +167,7 @@ VERTICES: Dict[str, Dict[str, Any]] = {
             ("role", "NOTUNIQUE"),
             ("timestamp", "NOTUNIQUE"),
             ("embedding", "LSM_VECTOR",
-             f"dimensions:{_VECTOR_DIM},similarity:'COSINE',quantization:'INT8'"),
+             f"dimensions:{_VECTOR_DIM},similarity:'COSINE',encoding:'INT8'"),
             # Phase 3: direct lookup by session_id + timestamp (replaces idx_messages_session)
             (("session_id", "timestamp"), "NOTUNIQUE"),
             (("session_id", "active", "timestamp"), "NOTUNIQUE"),
@@ -274,13 +274,13 @@ VERTICES: Dict[str, Dict[str, Any]] = {
             ("helpful_count", "INTEGER", "DEFAULT 0"),
             ("created_at", "DOUBLE"),
             ("updated_at", "DOUBLE"),
-            ("embedding", f"LIST(EXTERNAL true)"),
+            ("embedding", "BINARY(EXTERNAL true)"),
         ],
         "indexes": [
             ("category", "NOTUNIQUE"),
             ("trust_score", "NOTUNIQUE"),
             ("embedding", "LSM_VECTOR",
-             f"dimensions:{_VECTOR_DIM},similarity:'COSINE',quantization:'INT8'"),
+             f"dimensions:{_VECTOR_DIM},similarity:'COSINE',encoding:'INT8'"),
             # Phase 3: full-text search (replaces FTS5 facts_fts virtual table)
             ("content", "FULL_TEXT"),
         ],
@@ -329,7 +329,7 @@ VERTICES: Dict[str, Dict[str, Any]] = {
             ("summary", "STRING"),
             ("keywords", "LIST"),
             ("entity_names", "LIST"),
-            ("embedding", f"LIST(EXTERNAL true)"),
+            ("embedding", "BINARY(EXTERNAL true)"),
             ("created_at", "DOUBLE"),
             ("profile", "STRING"),
             ("model", "STRING"),
@@ -337,7 +337,7 @@ VERTICES: Dict[str, Dict[str, Any]] = {
         "indexes": [
             ("summary", "FULL_TEXT"),
             ("embedding", "LSM_VECTOR",
-             f"dimensions:{_VECTOR_DIM},similarity:'COSINE',quantization:'INT8'"),
+             f"dimensions:{_VECTOR_DIM},similarity:'COSINE',encoding:'INT8'"),
             ("created_at", "NOTUNIQUE"),
             ("profile", "NOTUNIQUE"),
         ],

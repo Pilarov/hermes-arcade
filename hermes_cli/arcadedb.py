@@ -177,11 +177,15 @@ class ArcadeDBAdapter:
 
     def _http_send(
         self, sql: str, ignore_already_errors: bool = True,
+        params: Optional[dict] = None,
     ) -> List[Dict[str, Any]]:
         client = self._http_client()
+        body: dict = {"language": "sql", "command": sql}
+        if params:
+            body["params"] = params
         resp = client.post(
             f"/api/v1/command/{self._cfg.database}",
-            json={"language": "sql", "command": sql},
+            json=body,
             headers={"Authorization": f"Basic {self._http_auth()}"},
         )
         if resp.status_code >= 400:
@@ -302,19 +306,34 @@ class ArcadeDBAdapter:
         params=None,
         language: str = "sql",
     ) -> List[Dict[str, Any]]:
-        """Execute a SQL command via HTTP API.
-
-        Dict/tuple params are auto-converted to string formatting (_fmt).
+        """Execute SQL via HTTP. Dict params with $bytes/$int8 typed markers
+        are sent as named HTTP parameters (:name in SQL). Regular params
+        are formatted via _fmt()/_fmt_tuple().
         """
+        http_params: Optional[dict] = None
+        fmt_params: dict = {}
+
         if isinstance(params, dict):
-            sql = self._fmt(sql, params)
+            for k, v in params.items():
+                if isinstance(v, dict) and any(
+                    mk in v for mk in ("$bytes", "$int8")
+                ):
+                    if http_params is None:
+                        http_params = {}
+                    http_params[k] = v
+                else:
+                    fmt_params[k] = v
+            if fmt_params:
+                sql = self._fmt(sql, fmt_params)
         elif isinstance(params, (tuple, list)):
             sql = self._fmt_tuple(sql, params)
 
         if language == "cypher":
             sql = "{cypher} " + sql
 
-        return self._http_execute(sql)
+        return self._http_send(
+            sql, ignore_already_errors=True, params=http_params,
+        )
 
     def query(
         self,
