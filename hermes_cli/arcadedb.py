@@ -143,14 +143,16 @@ class ArcadeDBAdapter:
         Uses a FRESH connection for every transaction to avoid
         ArcadeDB PG pool corruption (simple query mode limitation).
         Read operations (execute/query) still use the connection pool.
+
+        autocommit is disabled for the fresh connection so that
+        BEGIN/COMMIT actually bracket a real transaction.
         """
-        # Fresh connection — pool corruption workaround for writes
         conn = psycopg.connect(
             host=self._cfg.host, port=self._cfg.port,
             dbname=self._cfg.database,
             user=self._cfg.user, password=self._cfg.password,
             connect_timeout=5, sslmode="disable",
-            autocommit=True, row_factory=dict_row,
+            autocommit=False, row_factory=dict_row,
         )
         cur = conn.cursor()
         try:
