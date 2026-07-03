@@ -144,15 +144,17 @@ class ArcadeDBAdapter:
         ArcadeDB PG pool corruption (simple query mode limitation).
         Read operations (execute/query) still use the connection pool.
 
-        autocommit is disabled for the fresh connection so that
-        BEGIN/COMMIT actually bracket a real transaction.
+        Note: autocommit=True is REQUIRED for ArcadeDB PG simple query
+        mode. Without it, BEGIN/COMMIT are silently no-ops and the
+        server enters inconsistent transaction states. Each statement
+        in fn(cursor) is individually auto-committed.
         """
         conn = psycopg.connect(
             host=self._cfg.host, port=self._cfg.port,
             dbname=self._cfg.database,
             user=self._cfg.user, password=self._cfg.password,
             connect_timeout=5, sslmode="disable",
-            autocommit=False, row_factory=dict_row,
+            autocommit=True, row_factory=dict_row,
         )
         cur = conn.cursor()
         try:
