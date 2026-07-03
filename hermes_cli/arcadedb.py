@@ -246,13 +246,17 @@ class ArcadeDBAdapter:
         """Execute fn(cursor) via sqlscript batch (implicit BEGIN/COMMIT).
 
         All SQL statements in fn(cursor) are collected and sent as one
-        HTTP POST with language='sqlscript'. ArcadeDB wraps sqlscript
-        in implicit BEGIN/COMMIT — data is visible across statements.
-        fetchall()/fetchone() flush the accumulated SQL and return results.
-        Subsequent execute() calls start a new batch.
+        HTTP POST with language='sqlscript'. ArcadeDB wraps in implicit
+        BEGIN/COMMIT — data is visible across statements.
+
+        fetchall()/fetchone() flush and return results. Any remaining
+        SQL in the buffer is flushed after fn returns.
         """
         collector = ArcadeDBAdapter._SqlCollector(self)
-        return fn(collector)
+        result = fn(collector)
+        if collector._sqls:
+            collector._flush()
+        return result
 
     class _SqlCollector:
         """Collects SQL, sends as sqlscript batch on fetchall()."""
