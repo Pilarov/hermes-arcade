@@ -13,24 +13,16 @@ API сервер для OpenWebUI запущен.
 | 2 | 26.7.1 | 48/59 (81%) | `vector.fuse()` заработал, уникальные ID в тестах |
 | 3 | 26.7.1 | 47/59 (80%) | `transact()` свежие соединения (не пул), `autocommit=True` подтверждён |
 
-### Финальный прогон (26.7.1, autocommit=True)
+### Финальный прогон (26.7.1, autocommit=True, _q() вместо %s)
 
 ```
 Адаптер + фабрика:       15 pass / 0 fail  ✅
-Compression locks:        2 pass / 6 fail  (concurrent modification + lock detection)
+Compression locks:        5 pass / 3 fail  (duplicate key — смежные тесты)
 Search:                   7 pass / 2 fail  (search_basic, hybrid_basic — пустые результаты)
-E2E:                      23 pass / 4 fail (pool corruption)
+E2E:                      22 pass / 5 fail (pool corruption)
 ─────────────────────────────────────────────────
-ИТОГО:                   47 pass / 12 fail
+ИТОГО:                   49 pass / 10 fail (83%)
 ```
-
-### Разбор 12 оставшихся фейлов
-
-| # | Тесты | Причина | Категория |
-|---|-------|---------|-----------|
-| 6 | Compression lock: conflict, expired, refresh_extends, release_non_owner, get_holder, concurrent_compressors | `%s` bind param в raw cursor → не работает в ArcadeDB PG | **Починено:** замена на `_q()` |
-| 2 | search_basic, hybrid_basic | `assert 0 >= 1` — поиск не находит данные | Требует расследования |
-| 4 | E2E: end_and_reopen, delete, acquire_release, meta_crud | Transaction not active / pool corruption | ArcadeDB PG protocol limitation |
 
 ### Ключевые находки
 
