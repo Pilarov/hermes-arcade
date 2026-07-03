@@ -223,7 +223,7 @@ def mock_embedder():
         MagicMock(dense=[0.1] * 1024, sparse=None)
     ]
     embedder.embed_query.return_value = MagicMock(
-        dense=[0.2] * 1024, sparse=None
+        dense=[0.1] * 1024, sparse=None
     )
     return embedder
 
