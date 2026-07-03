@@ -990,11 +990,22 @@ class ArcadedbSessionDB:
             sort_clause = "timestamp ASC"
 
         rows = []
-        # Skip vector.neighbors — HTTP API serializes vectors differently,
-        # and `expand()` is OrientDB-only syntax. Always use LIKE fallback.
-        #
-        # TODO: restore vector search when HTTP API supports `vector.neighbors`
-        #       with proper vector serialization.
+        if self._embedder:
+            try:
+                q_emb = self._embedder.embed_query(query)
+                from hermes_cli.arcadedb import ArcadeDBAdapter
+                qv = ArcadeDBAdapter._vec(q_emb.dense)
+                rows = self._adapter.query(
+                    f"SELECT @rid as rid, session_id, role, content, "
+                    "timestamp, tool_name "
+                    "FROM Message "
+                    f"WHERE @rid IN [ expand(vector.neighbors('Message[embedding]', {qv}, {limit * 2})) ] "
+                    f"{active_clause}{filter_clause} "
+                    f"ORDER BY {sort_clause} "
+                    f"LIMIT {limit} SKIP {offset}"
+                )
+            except Exception:
+                pass  # fall through to LIKE
 
         # LIKE fallback (primary for CJK, secondary for non-embedded)
         if not rows:
@@ -1104,18 +1115,18 @@ class ArcadedbSessionDB:
                 f"ORDER BY created_at DESC LIMIT {top_k}"
             )
 
-        # Compute query embedding via $bytes typed marker (HTTP API)
+        # Compute query embedding — pass as JSON array SQL literal 
         from hermes_cli.arcadedb import ArcadeDBAdapter
         q_emb = self._embedder.embed_query(query)
-        qv_marker = ArcadeDBAdapter._vec_to_bytes(q_emb.dense)
+        qv = ArcadeDBAdapter._vec(q_emb.dense)  # JSON array for SQL
 
         where = ""
         kw_sql = ""
-        params: Dict[str, Any] = {"q": qv_marker, "tk2": top_k}
+        params: Dict[str, Any] = {"tk2": top_k}
         fulltext_branch = ""
 
         if keywords:
-            kw_sql = f" WHERE SEARCH_INDEX('SearchMatter[summary]', :kw) = true"
+            kw_sql = f" WHERE SEARCH_INDEX('SearchMatter[summary]', %(kw)s) = true"
             params["kw"] = keywords
         if profile:
             where += f" AND profile = {_q(profile)}"
@@ -1131,11 +1142,11 @@ class ArcadedbSessionDB:
             fulltext_branch = "    (SELECT @rid FROM SearchMatter),\n"
 
         sql = (
-            "SELECT FROM `vector.fuse`(\n"
-            f"    `vector.neighbors`('SearchMatter[embedding]', :q, {top_k}),\n"
+            "SELECT expand(vector.fuse(\n"
+            f"    `vector.neighbors`('SearchMatter[embedding]', {qv}, {top_k}),\n"
             f"{fulltext_branch}"
             "    { fusion: 'RRF', groupBy: 'session_rid', groupSize: 1 }\n"
-            ") LIMIT :tk2"
+            ")) LIMIT %(tk2)s"
         )
 
         return self._adapter.query(sql, params)

@@ -177,15 +177,11 @@ class ArcadeDBAdapter:
 
     def _http_send(
         self, sql: str, ignore_already_errors: bool = True,
-        params: Optional[dict] = None,
     ) -> List[Dict[str, Any]]:
         client = self._http_client()
-        body: dict = {"language": "sql", "command": sql}
-        if params:
-            body["params"] = params
         resp = client.post(
             f"/api/v1/command/{self._cfg.database}",
-            json=body,
+            json={"language": "sql", "command": sql},
             headers={"Authorization": f"Basic {self._http_auth()}"},
         )
         if resp.status_code >= 400:
@@ -211,17 +207,12 @@ class ArcadeDBAdapter:
             return [{"result": str(result)}]
         return []
 
-    def _http_send_script(
-        self, script: str, params: Optional[dict] = None,
-    ) -> List[Dict[str, Any]]:
+    def _http_send_script(self, script: str) -> List[Dict[str, Any]]:
         """Execute sqlscript batch via HTTP (implicit BEGIN/COMMIT)."""
         client = self._http_client()
-        body: dict = {"language": "sqlscript", "command": script}
-        if params:
-            body["params"] = params
         resp = client.post(
             f"/api/v1/command/{self._cfg.database}",
-            json=body,
+            json={"language": "sqlscript", "command": script},
             headers={"Authorization": f"Basic {self._http_auth()}"},
         )
         if resp.status_code >= 400:
@@ -314,36 +305,16 @@ class ArcadeDBAdapter:
         """Execute a SQL command via HTTP API.
 
         Dict/tuple params are auto-converted to string formatting (_fmt).
-        Dict params with $bytes/$int8 typed markers are passed to HTTP body
-        as named parameters (:name syntax in SQL).
         """
-        http_params: Optional[dict] = None
-
         if isinstance(params, dict):
-            # Split: typed markers ($bytes/$int8) → HTTP params, rest → _fmt
-            fmt_params = {}
-            http_params = {}
-            for k, v in params.items():
-                if isinstance(v, dict) and any(
-                    mk in v for mk in ("$bytes", "$int8")
-                ):
-                    http_params[k] = v
-                else:
-                    fmt_params[k] = v
-            if fmt_params:
-                sql = self._fmt(sql, fmt_params)
-            params = None  # consumed
+            sql = self._fmt(sql, params)
         elif isinstance(params, (tuple, list)):
             sql = self._fmt_tuple(sql, params)
-            params = None
 
         if language == "cypher":
             sql = "{cypher} " + sql
 
-        return self._http_send(
-            sql, ignore_already_errors=True,
-            params=http_params if http_params else None,
-        )
+        return self._http_execute(sql)
 
     def query(
         self,
