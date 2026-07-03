@@ -98,16 +98,18 @@ class TestQueryMethods:
         assert len(rows) == 1
 
     def test_query_select(self, arcadedb_adapter):
-        arcadedb_adapter.execute(f"CREATE VERTEX TestQ SET name = {_q('sel')}")
+        uid = f"qsel-{id(self)}"
+        arcadedb_adapter.execute(f"CREATE VERTEX TestQ SET name = {_q(uid)}")
         rows = arcadedb_adapter.query(
-            f"SELECT FROM TestQ WHERE name = {_q('sel')}"
+            f"SELECT FROM TestQ WHERE name = {_q(uid)}"
         )
         assert len(rows) == 1
         assert isinstance(rows[0], dict)
 
     def test_query_params(self, arcadedb_adapter):
+        uid = f"qpar-{id(self)}"
         arcadedb_adapter.execute(
-            f"CREATE VERTEX TestQ SET name = {_q('par')}, age = 42"
+            f"CREATE VERTEX TestQ SET name = {_q(uid)}, age = 42"
         )
         rows = arcadedb_adapter.query(
             f"SELECT FROM TestQ WHERE age = 42"
@@ -130,14 +132,15 @@ class TestVectorHandling:
             pass
 
     def test_vector_sql_literal(self, arcadedb_adapter):
+        uid = f"vlit-{id(self)}"
         vec = [0.1, 0.2, 0.3, 0.4]
         vec_str = ArcadeDBAdapter._vec(vec)
         assert vec_str == "[0.1, 0.2, 0.3, 0.4]"
         arcadedb_adapter.execute(
-            f"CREATE VERTEX TestV SET name = {_q('v1')}, embedding = {vec_str}"
+            f"CREATE VERTEX TestV SET name = {_q(uid)}, embedding = {vec_str}"
         )
         rows = arcadedb_adapter.query(
-            f"SELECT FROM TestV WHERE name = {_q('v1')}"
+            f"SELECT FROM TestV WHERE name = {_q(uid)}"
         )
         assert len(rows) == 1
 

@@ -10,6 +10,7 @@ They will FAIL/SKIP until Phase 3 implements ArcadedbSessionDB.
 """
 
 import time
+import uuid
 from threading import Thread
 
 import pytest
@@ -25,9 +26,14 @@ except ImportError:
 
 @pytest.mark.skipif(not HAS_SESSION, reason="Phase 3 ArcadedbSessionDB not yet implemented")
 class TestCompressionLocks:
+
+    @pytest.fixture(autouse=True)
+    def _unique_prefix(self):
+        self._pref = uuid.uuid4().hex[:8]
+
     def test_acquire_first(self, arcadedb_session):
         """CL-01: First acquire -> True."""
-        sid = "lock-test-1"
+        sid = f"lock-1-{self._pref}"
         arcadedb_session.create_session(sid, source="test")
         result = arcadedb_session.try_acquire_compression_lock(
             sid, "worker-1", ttl_seconds=30
@@ -36,7 +42,7 @@ class TestCompressionLocks:
 
     def test_acquire_conflict(self, arcadedb_session):
         """CL-02: Two acquires on same session -> second fails."""
-        sid = "lock-test-2"
+        sid = f"lock-2-{self._pref}"
         arcadedb_session.create_session(sid, source="test")
         assert arcadedb_session.try_acquire_compression_lock(
             sid, "worker-1", ttl_seconds=30
@@ -47,7 +53,7 @@ class TestCompressionLocks:
 
     def test_acquire_expired(self, arcadedb_session):
         """CL-03: Expired lock can be re-acquired."""
-        sid = "lock-test-3"
+        sid = f"lock-3-{self._pref}"
         arcadedb_session.create_session(sid, source="test")
         assert arcadedb_session.try_acquire_compression_lock(
             sid, "worker-1", ttl_seconds=0
@@ -59,7 +65,7 @@ class TestCompressionLocks:
 
     def test_refresh_extends(self, arcadedb_session):
         """CL-04: refresh() extends TTL."""
-        sid = "lock-test-4"
+        sid = f"lock-4-{self._pref}"
         arcadedb_session.create_session(sid, source="test")
         arcadedb_session.try_acquire_compression_lock(
             sid, "worker-1", ttl_seconds=30
@@ -70,7 +76,7 @@ class TestCompressionLocks:
 
     def test_release(self, arcadedb_session):
         """CL-05: After release, lock can be re-acquired."""
-        sid = "lock-test-5"
+        sid = f"lock-5-{self._pref}"
         arcadedb_session.create_session(sid, source="test")
         arcadedb_session.try_acquire_compression_lock(
             sid, "worker-1", ttl_seconds=30
@@ -82,7 +88,7 @@ class TestCompressionLocks:
 
     def test_release_non_owner(self, arcadedb_session):
         """CL-06: Release by non-owner -> no-op, lock stays."""
-        sid = "lock-test-6"
+        sid = f"lock-6-{self._pref}"
         arcadedb_session.create_session(sid, source="test")
         arcadedb_session.try_acquire_compression_lock(
             sid, "worker-1", ttl_seconds=30
@@ -93,7 +99,7 @@ class TestCompressionLocks:
 
     def test_get_holder(self, arcadedb_session):
         """CL-07: get_holder() returns correct holder."""
-        sid = "lock-test-7"
+        sid = f"lock-7-{self._pref}"
         arcadedb_session.create_session(sid, source="test")
         arcadedb_session.try_acquire_compression_lock(
             sid, "worker-1", ttl_seconds=30
@@ -102,7 +108,7 @@ class TestCompressionLocks:
 
     def test_concurrent_compressors(self, arcadedb_session):
         """CL-08: 10 concurrent acquirers -> exactly 1 wins."""
-        sid = "lock-test-8"
+        sid = f"lock-8-{self._pref}"
         arcadedb_session.create_session(sid, source="test")
 
         results = []
