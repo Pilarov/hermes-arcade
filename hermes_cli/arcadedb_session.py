@@ -999,7 +999,7 @@ class ArcadedbSessionDB:
                     f"SELECT @rid as rid, session_id, role, content, "
                     "timestamp, tool_name "
                     "FROM Message "
-                    f"WHERE @rid IN [ expand(`vector.neighbors`('Message[embedding]', {qv}, {limit * 2})) ] "
+                    f"WHERE @rid IN [ vector.neighbors('Message[embedding]', {qv}, {limit * 2}) ] "
                     f"{active_clause}{filter_clause} "
                     f"ORDER BY {sort_clause} "
                     f"LIMIT {limit} SKIP {offset}"
@@ -1135,11 +1135,11 @@ class ArcadedbSessionDB:
             fulltext_branch = "    (SELECT @rid FROM SearchMatter),\n"
 
         sql = (
-            "SELECT expand(`vector.fuse`(\n"
+            "SELECT FROM `vector.fuse`(\n"
             f"    `vector.neighbors`('SearchMatter[embedding]', {qv}, {top_k}),\n"
             f"{fulltext_branch}"
             "    { fusion: 'RRF', groupBy: 'session_rid', groupSize: 1 }\n"
-            ")) LIMIT %(tk2)s"
+            ") LIMIT %(tk2)s"
         )
 
         return self._adapter.query(sql, params)

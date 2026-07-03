@@ -58,7 +58,7 @@ class TestCompressionLocks:
         assert arcadedb_session.try_acquire_compression_lock(
             sid, "worker-1", ttl_seconds=0
         )
-        time.sleep(0.1)
+        time.sleep(0.5)
         assert arcadedb_session.try_acquire_compression_lock(
             sid, "worker-2", ttl_seconds=30
         )
