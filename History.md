@@ -13,28 +13,38 @@ API сервер для OpenWebUI запущен.
 | 2 | 26.7.1 | 48/59 (81%) | `vector.fuse()` заработал, уникальные ID в тестах |
 | 3 | 26.7.1 | 47/59 (80%) | `transact()` свежие соединения (не пул), `autocommit=True` подтверждён |
 
-### Финальный прогон (26.7.1, autocommit=True, _q() вместо %s)
+### Финальный прогон (pool reset, без HTTP)
 
 ```
 Адаптер + фабрика:       15 pass / 0 fail  ✅
 Compression locks:        5 pass / 3 fail  (duplicate key — смежные тесты)
 Search:                   7 pass / 2 fail  (search_basic, hybrid_basic — пустые результаты)
-E2E:                      22 pass / 5 fail (pool corruption)
+E2E:                      23 pass / 4 fail (pool corruption)
 ─────────────────────────────────────────────────
-ИТОГО:                   49 pass / 10 fail (83%)
+ИТОГО:                   50 pass / 9 fail (85%)
 ```
+
+### Три стратегии — итоги
+
+| Стратегия | Результат | Вердикт |
+|-----------|-----------|---------|
+| PG fresh connections + autocommit=True | 49/59 (83%) | База, работает для unit-тестов |
+| HTTP API (port 2480) | 31/59 (52%) | 🔴 401 Unauthorized — ArcadeDB 26.7.1 не принимает HTTP Basic Auth при пароле через Java property |
+| Pool reset каждые 15 transact() | 50/59 (85%) | 🟢 Лучший результат. +1 E2E pass |
 
 ### Ключевые находки
 
-- **`autocommit=True` обязателен** для ArcadeDB PG simple query mode.
-  `autocommit=False` с `BEGIN`/`COMMIT` вызывает ConcurrentModification ошибки.
-- **Bind params (`%s`) не работают** в raw cursor внутри `transact()`.
-  Только `_q()` / `_n()` string formatting. Адаптерный `execute()`/`query()`
-  уже делают `_fmt()` автоматически.
-- **Пароль через `-Darcadedb.server.rootPassword=...` в `JAVA_OPTS`** —
-  единственный работающий способ для неинтерактивного Docker. `ARCADEDB_ROOT_PASSWORD`
-  env var не работает в 26.7+.
-- **`vector.fuse()` доступен с 26.5.1.** 26.4.2 не имеет его.
+- **HTTP API заблокирован**: ArcadeDB 26.7.1 возвращает 401 на все HTTP endpoints
+  при пароле, установленном через `-Darcadedb.server.rootPassword`. PG протокол
+  работает с тем же паролем. Баг ArcadeDB.
+- **Pool reset эффективен**: пересоздание пула каждые 15 `transact()` вызовов
+  чинит 1 из 5 E2E фейлов и предотвращает полную деградацию.
+- **`%s` bind params в raw cursor**: замена на `_q()` починила 3 compression lock
+  теста.
+- **`autocommit=False` ломает всё**: ArcadeDB PG требует `autocommit=True`,
+  иначе ConcurrentModification ошибки.
+- **Пароль через `-Darcadedb.server.rootPassword`** — единственный работающий
+  способ для Docker. `ARCADEDB_ROOT_PASSWORD` не работает в 26.7+.
 
 ### Что сделано
 
