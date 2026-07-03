@@ -1155,11 +1155,14 @@ class ArcadedbSessionDB:
                 f"DELETE FROM CompressionLock WHERE session_id = {_q(session_id)} "
                 f"AND expires_at < {_n(now_ts)}"
             )
-            cur.execute(
-                f"INSERT INTO CompressionLock SET "
-                f"session_id = {_q(session_id)}, holder = {_q(holder)}, "
-                f"acquired_at = {_n(now_ts)}, expires_at = {_n(expires)}"
-            )
+            try:
+                cur.execute_strict(
+                    f"INSERT INTO CompressionLock SET "
+                    f"session_id = {_q(session_id)}, holder = {_q(holder)}, "
+                    f"acquired_at = {_n(now_ts)}, expires_at = {_n(expires)}"
+                )
+            except ArcadeDBError:
+                return False
             cur.execute(
                 f"SELECT holder FROM CompressionLock WHERE session_id = {_q(session_id)}"
             )
