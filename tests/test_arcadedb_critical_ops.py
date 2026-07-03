@@ -163,3 +163,88 @@ class TestClearMessagesAndCount:
         # Soft-delete: active=0. Message count is total (including inactive)
         total = arcadedb_session.message_count(sid)
         assert total >= 3  # Soft delete keeps rows
+
+
+@pytest.mark.skipif(not HAS_SESSION, reason="ArcadedbSessionDB not available")
+class TestSessionMeta:
+    """CR-08: update_session_meta stores model_config + optional model."""
+
+    def test_update_meta(self, arcadedb_session):
+        sid = f"mta-{_uid()}"
+        arcadedb_session.create_session(sid, source="test")
+        arcadedb_session.update_session_meta(sid, '{"key":"val"}', model="deepseek")
+        s = arcadedb_session.get_session(sid)
+        assert s["model_config"] == '{"key":"val"}'
+        assert s["model"] == "deepseek"
+
+
+@pytest.mark.skipif(not HAS_SESSION, reason="ArcadedbSessionDB not available")
+class TestBillingRoute:
+    """CR-09: update_session_billing_route stores provider/URL/mode."""
+
+    def test_billing_route(self, arcadedb_session):
+        sid = f"bil-{_uid()}"
+        arcadedb_session.create_session(sid, source="test")
+        arcadedb_session.update_session_billing_route(
+            sid, provider="openai", base_url="https://api.openai.com", billing_mode="token"
+        )
+        s = arcadedb_session.get_session(sid)
+        assert s["billing_provider"] == "openai"
+        assert s["billing_base_url"] == "https://api.openai.com"
+        assert s["billing_mode"] == "token"
+
+
+@pytest.mark.skipif(not HAS_SESSION, reason="ArcadedbSessionDB not available")
+class TestSessionCwd:
+    """CR-10: update_session_cwd stores cwd + git metadata."""
+
+    def test_update_cwd(self, arcadedb_session):
+        sid = f"cwd-{_uid()}"
+        arcadedb_session.create_session(sid, source="test")
+        arcadedb_session.update_session_cwd(
+            sid, cwd="/home/user/project", git_branch="main", git_repo_root="/home/user/project"
+        )
+        s = arcadedb_session.get_session(sid)
+        assert s["cwd"] == "/home/user/project"
+        assert s["git_branch"] == "main"
+        assert s["git_repo_root"] == "/home/user/project"
+
+
+@pytest.mark.skipif(not HAS_SESSION, reason="ArcadedbSessionDB not available")
+class TestBackfillRepoRoots:
+    """CR-11: backfill_repo_roots fills NULL git_repo_root by cwd."""
+
+    def test_backfill(self, arcadedb_session):
+        sid = f"bfr-{_uid()}"
+        arcadedb_session.create_session(sid, source="test")
+        arcadedb_session.update_session_cwd(sid, cwd="/home/user/repo")
+        arcadedb_session.backfill_repo_roots({"/home/user/repo": "/home/user/repo"})
+        s = arcadedb_session.get_session(sid)
+        assert s["git_repo_root"] == "/home/user/repo"
+
+
+@pytest.mark.skipif(not HAS_SESSION, reason="ArcadedbSessionDB not available")
+class TestGatewayPeer:
+    """CR-12: record_gateway_session_peer + find_latest_gateway_session_for_peer."""
+
+    def test_record_peer(self, arcadedb_session):
+        sid = f"gwp-{_uid()}"
+        arcadedb_session.create_session(sid, source="test", user_id="user1", session_key="sk1")
+        arcadedb_session.record_gateway_session_peer(
+            sid, source="telegram", user_id="user1", chat_id="chat1", chat_type="private"
+        )
+        s = arcadedb_session.get_session(sid)
+        assert s["user_id"] == "user1"
+        assert s["chat_id"] == "chat1"
+        assert s["chat_type"] == "private"
+
+    def test_find_peer(self, arcadedb_session):
+        sid = f"gwp-find-{_uid()}"
+        arcadedb_session.create_session(sid, source="test", user_id="user2", session_key="sk2")
+        arcadedb_session.record_gateway_session_peer(
+            sid, source="telegram", user_id="user2", session_key="sk2"
+        )
+        found = arcadedb_session.find_latest_gateway_session_for_peer(
+            source="telegram", user_id="user2", session_key="sk2"
+        )
+        assert found is not None and found["id"] == sid

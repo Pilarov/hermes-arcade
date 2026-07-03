@@ -127,3 +127,37 @@ class TestCompressionLocks:
             t.join()
 
         assert sum(results) == 1
+
+
+@pytest.mark.skipif(not HAS_SESSION, reason="ArcadedbSessionDB not available")
+class TestCompressionCooldown:
+    """CL-09-11: compression failure cooldown lifecycle."""
+
+    def test_record_cooldown(self, arcadedb_session):
+        """CL-09: record_compression_failure_cooldown sets fields."""
+        import time
+        sid = f"cd-{uuid.uuid4().hex[:6]}"
+        arcadedb_session.create_session(sid, source="test")
+        until = time.time() + 300
+        arcadedb_session.record_compression_failure_cooldown(sid, until, "test error")
+        info = arcadedb_session.get_compression_failure_cooldown(sid)
+        assert info is not None
+        assert "test error" in str(info.get("error", ""))
+        assert info["cooldown_until"] >= until - 1
+
+    def test_get_no_cooldown(self, arcadedb_session):
+        """CL-10: get_compression_failure_cooldown returns None when not set."""
+        sid = f"cd-{uuid.uuid4().hex[:6]}"
+        arcadedb_session.create_session(sid, source="test")
+        info = arcadedb_session.get_compression_failure_cooldown(sid)
+        assert info is None
+
+    def test_clear_cooldown(self, arcadedb_session):
+        """CL-11: clear_compression_failure_cooldown nulls fields."""
+        import time
+        sid = f"cd-{uuid.uuid4().hex[:6]}"
+        arcadedb_session.create_session(sid, source="test")
+        arcadedb_session.record_compression_failure_cooldown(sid, time.time() + 300, "err")
+        arcadedb_session.clear_compression_failure_cooldown(sid)
+        info = arcadedb_session.get_compression_failure_cooldown(sid)
+        assert info is None
