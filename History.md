@@ -13,16 +13,42 @@ API сервер для OpenWebUI запущен.
 | 2 | 26.7.1 | 48/59 (81%) | `vector.fuse()` заработал, уникальные ID в тестах |
 | 3 | 26.7.1 | 47/59 (80%) | `transact()` свежие соединения (не пул), `autocommit=True` подтверждён |
 
-### Финальный прогон (HTTP-only, чистая БД, 26.7.1)
+### Стабильный результат (HTTP-only, 26.7.1, чистый прогон)
 
 ```
 Адаптер + фабрика:       15 pass / 0 fail  ✅
-Compression locks:        6 pass / 2 fail  (release_non_owner, get_holder — SELECT не видит INSERT)
-Search:                   8 pass / 1 fail  (hybrid_basic — vector.neighbors через HTTP)
-E2E:                      26 pass / 1 fail (get_holder — та же CAS проблема)
+Compression locks:        7 pass / 1 fail  (acquire_expired — ttl=0 timing)
+Search:                   8 pass / 1 fail  (hybrid_basic — vector.neighbors)
+E2E:                      25 pass / 2 fail (CAS lock acquire_release + get_holder)
 ─────────────────────────────────────────────────
 ИТОГО:                   55 pass / 4 fail (93%)
 ```
+
+### Что пробовали
+
+| Подход | Результат | Почему не взлетело |
+|--------|-----------|-------------------|
+| PG fresh conn | 40/59 | Pool corruption |
+| PG + pool reset | 50/59 | Частично |
+| HTTP + HttpCursor | 55/59 | ✅ Стабильно |
+| HTTP + SqlCollector (sqlscript) | 42/59 | Ломает create_session/append_message (fetchall+return early) |
+| HTTP + сессионные транзакции | Не пробовали | Сложность управления сессиями |
+
+### Оставшиеся 4 фейла
+
+| Тест | Причина | Решение |
+|------|---------|---------|
+| test_acquire_expired | ttl=0, DELETE `<` строгое неравенство, expires_at == now_ts | ttl=-1 (фикс готов) |
+| test_hybrid_basic | vector.neighbors через HTTP не находит результаты с mock эмбеддингами | Нужна отладка или LIKE fallback |
+| E2E acquire_release + get_holder | execute_strict для INSERT + execute для SELECT — разные HTTP запросы, данные не видны | Сессионные транзакции (единственный способ) |
+
+### Ключевой вывод по CAS
+
+Compression lock требует чтобы INSERT и SELECT были в одной транзакции.
+Через stateless HTTP это сделать нельзя. Нужен либо:
+- sqlscript (но он ломает create_session)
+- сессионные транзакции (BEGIN→INSERT→SELECT→COMMIT через `arcadedb-session-id`)
+- гибрид: sqlscript только для compression lock, HttpCursor для остального
 
 ### Три стратегии — итоги
 
