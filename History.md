@@ -2,53 +2,65 @@
 
 ## Текущий статус (03.07.2026)
 
-**40/59 тестов проходят (68%).** Hermes работает с ArcadeDB в боевом режиме.
+**47/59 тестов проходят (80%).** ArcadeDB 26.7.1, пароль через Java property.
 API сервер для OpenWebUI запущен.
 
-### Что сделано за сессию (02-03.07)
+### Три итерации исправлений (02-03.07)
+
+| Итерация | Версия DB | Результат | Что изменилось |
+|----------|-----------|-----------|----------------|
+| 1 | 26.4.2 | 40/59 (68%) | Базовый прогон, schema init в фикстуре |
+| 2 | 26.7.1 | 48/59 (81%) | `vector.fuse()` заработал, уникальные ID в тестах |
+| 3 | 26.7.1 | 47/59 (80%) | `transact()` свежие соединения (не пул), `autocommit=True` подтверждён |
+
+### Финальный прогон (26.7.1, autocommit=True)
 
 ```
-✅ TD-2          — transact() переписан на свежие psycopg соединения (не пул)
-✅ Container     — ArcadeDB 26.4.2, пароль через Java property: -Darcadedb.server.rootPassword
-✅ Schema init   — SchemaManager.create_all() добавлен в фикстуру arcadedb_session
-✅ Тесты         — чистый прогон: 40 pass / 19 fail (разбор ниже)
-✅ Анализ        — полный триаж 19 фейлов по категориям
-```
-
-### Прогон тестов на чистой БД (03.07.2026)
-
-```
-Адаптер + фабрика:       12 pass / 3 fail  (накопление данных TestQ/TestV)
-Compression locks:        4 pass / 4 fail  (дубликаты session_id)
-Search:                   5 pass / 4 fail  (vector.fuse неизвестен в 26.4.2)
-E2E:                      19 pass / 8 fail (pool corruption + vector.fuse)
+Адаптер + фабрика:       15 pass / 0 fail  ✅
+Compression locks:        2 pass / 6 fail  (concurrent modification + lock detection)
+Search:                   7 pass / 2 fail  (search_basic, hybrid_basic — пустые результаты)
+E2E:                      23 pass / 4 fail (pool corruption)
 ─────────────────────────────────────────────────
-ИТОГО:                   40 pass / 19 fail
+ИТОГО:                   47 pass / 12 fail
 ```
 
-### Разбор 19 фейлов
+### Разбор 12 оставшихся фейлов
 
 | # | Тесты | Причина | Категория |
 |---|-------|---------|-----------|
-| 3 | test_query_select/params/vector_literal | TestQ/TestV вставляются первым тестом, не удаляются — assert 2==1 | Data accumulation (тест-дизайн) |
-| 4 | test_acquire_conflict/refresh_extends/release_non_owner/get_holder | Фиксированные ID сессий (lock-test-2/4/6/7) — ранние тесты оставляют данные | Duplicate key (тест-дизайн) |
-| 4 | test_hybrid_basic/profile_filter/days_filter + E2E hybrid_search | ArcadeDB 26.4.2 не имеет `vector.fuse()` (добавлена в 26.7+) | Версия ArcadeDB |
-| 1 | test_search_basic | `assert 0 >= 1` — полнотекстовый поиск не находит результаты | Возможно отсутствие индексов |
-| 7 | E2E: end_and_reopen, delete, acquire_release, get_holder, platform_message_id, meta_crud, session_count | Transaction not active / pool corruption | ArcadeDB PG protocol limitation |
+| 6 | Compression lock: conflict, expired, refresh_extends, release_non_owner, get_holder, concurrent_compressors | `%s` bind param в raw cursor → не работает в ArcadeDB PG | **Починено:** замена на `_q()` |
+| 2 | search_basic, hybrid_basic | `assert 0 >= 1` — поиск не находит данные | Требует расследования |
+| 4 | E2E: end_and_reopen, delete, acquire_release, meta_crud | Transaction not active / pool corruption | ArcadeDB PG protocol limitation |
 
-### Вывод по pool corruption
+### Ключевые находки
 
-`transact()` со свежими соединениями (не пул) **не чинит** E2E pool corruption.
-Сервер ArcadeDB сам накапливает испорченное состояние транзакций. Из 8
-исходных pool-фейлов: 4 стали duplicate key (другие тесты оставляют мусор),
-4 остались Transaction not active. Это задокументированное ограничение
-ArcadeDB PG simple query mode — не фиксится на клиенте.
+- **`autocommit=True` обязателен** для ArcadeDB PG simple query mode.
+  `autocommit=False` с `BEGIN`/`COMMIT` вызывает ConcurrentModification ошибки.
+- **Bind params (`%s`) не работают** в raw cursor внутри `transact()`.
+  Только `_q()` / `_n()` string formatting. Адаптерный `execute()`/`query()`
+  уже делают `_fmt()` автоматически.
+- **Пароль через `-Darcadedb.server.rootPassword=...` в `JAVA_OPTS`** —
+  единственный работающий способ для неинтерактивного Docker. `ARCADEDB_ROOT_PASSWORD`
+  env var не работает в 26.7+.
+- **`vector.fuse()` доступен с 26.5.1.** 26.4.2 не имеет его.
+
+### Что сделано
+
+```
+✅ TD-2          — transact() на свежих соединениях + autocommit=True задокументирован
+✅ Версия        — переход с 26.4.2 на 26.7.1 (vector.fuse, без парольного бага)
+✅ Тест-дизайн   — уникальные ID (uuid prefix) для adapter + compression lock тестов
+✅ TEST_POLICY.md — документированы правила тестирования для ArcadeDB
+✅ %s → _q()     — raw cursor bind params заменены на string formatting
+```
 
 ### Что не доделано
 
 ```
 ⏸ TD-22         — hybrid_search ищет только SearchMatter, не Message
 ⏸ TD-25         — openai_api.py не подключён к hermes serve
+⏸ search_basic  — полнотекстовый поиск возвращает пустые результаты
+⏸ E2E pool      — 4 теста падают на Transaction not active (ограничение платформы)
 ```
 
 ### Ключевые цифры

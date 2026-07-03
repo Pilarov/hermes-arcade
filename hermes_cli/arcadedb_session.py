@@ -1168,8 +1168,7 @@ class ArcadedbSessionDB:
             except ArcadeDBError:
                 return False
             cur.execute(
-                "SELECT holder FROM CompressionLock WHERE session_id = %s",
-                (session_id,),
+                f"SELECT holder FROM CompressionLock WHERE session_id = {_q(session_id)}"
             )
             rows = cur.fetchall()
             return bool(rows and rows[0]["holder"] == holder)
