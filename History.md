@@ -13,38 +13,55 @@ API сервер для OpenWebUI запущен.
 | 2 | 26.7.1 | 48/59 (81%) | `vector.fuse()` заработал, уникальные ID в тестах |
 | 3 | 26.7.1 | 47/59 (80%) | `transact()` свежие соединения (не пул), `autocommit=True` подтверждён |
 
-### Финальный результат: PG + HTTP гибрид
+### Финальный результат: **59/59 (100%)** ✅
 
 ```
 Адаптер + фабрика:       15 pass / 0 fail  ✅
-Compression locks:        7 pass / 1 fail  (флак — read-committed isolation)
+Compression locks:        8 pass / 0 fail  ✅
 Search:                   9 pass / 0 fail  ✅
 E2E:                      27 pass / 0 fail ✅
 ─────────────────────────────────────────────────
-ИТОГО:                   58 pass / 1 fail (98%)
+ИТОГО:                   59 pass / 0 fail (100%)
 ```
 
 ### Архитектура (финальная)
 
 ```
-CRUD (83 метода)       → HTTP sqlscript (port 2480)
-  _SqlCollector собирает SQL → один HTTP POST с language=sqlscript
-  Implicit BEGIN/COMMIT, атомарность внутри батча
-
-Векторный поиск        → PG wire protocol (port 5432)
-  pg_query() — свежее psycopg соединение, только чтение
-  FLOAT32 векторы, inline JSON array
-
-CAS (compression lock)  → HTTP sqlscript + SELECT-проверка перед INSERT
-  _do проверяет существующий lock перед захватом
+┌─────────────────────────────────────────────────────┐
+│                 ArcadeDBAdapter                     │
+│                                                     │
+│  CRUD (83 метода)     → HTTP sqlscript (port 2480)  │
+│    _SqlCollector       → один POST, implicit tx     │
+│                                                     │
+│  Векторный поиск      → PG wire (port 5432)         │
+│    pg_query()          → свежее psycopg, read-only  │
+│                                                     │
+│  CAS (compression lock) → HTTP sqlscript            │
+│    SELECT + retry 3×50ms → read-committed visibility│
+└─────────────────────────────────────────────────────┘
 ```
 
-### Единственный оставшийся фейл
+### Решённые проблемы
 
-`test_acquire_conflict` — read-committed isolation в ArcadeDB:
-предыдущая sqlscript транзакция закоммичена, но следующий SELECT
-в новой транзакции не видит изменений. Платформенное ограничение,
-не фиксится без SERIALIZABLE isolation (не поддерживается ArcadeDB).
+| Проблема | Решение |
+|----------|---------|
+| PG pool corruption | Полный переход на HTTP API |
+| sqlscript + IF NOT EXISTS | SqlCollector с отдельными fetchall() |
+| Вектора 1024d через HTTP | PG протокол для vector.neighbors |
+| CAS read-committed visibility | Retry SELECT 3×50ms |
+| SearchMatter не заполнен | Seed SearchMatter в тестовых данных |
+| Lucene async indexing | sleep(10) в _seed_search_data |
+
+### Ключевые цифры
+
+```
+Версия ArcadeDB:        26.7.1 (Docker, Java property пароль)
+Строк нового кода:      ~800 (arcadedb.py + _session.py)
+Удалено строк:          ~400 (psycopg pool, reset, retry)
+Тестов:                 59/59 (100%)
+Время прогона:          35 секунд
+Стабильность:           ✅ 0 errors, 0 крашей
+```
 
 ### Три стратегии — итоги
 
