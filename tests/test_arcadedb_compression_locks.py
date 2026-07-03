@@ -56,7 +56,7 @@ class TestCompressionLocks:
         sid = f"lock-3-{self._uid()}"
         arcadedb_session.create_session(sid, source="test")
         assert arcadedb_session.try_acquire_compression_lock(
-            sid, "worker-1", ttl_seconds=-2
+            sid, "worker-1", ttl_seconds=-10
         )
         time.sleep(0.5)
         assert arcadedb_session.try_acquire_compression_lock(
