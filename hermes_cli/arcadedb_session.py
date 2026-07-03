@@ -990,22 +990,8 @@ class ArcadedbSessionDB:
             sort_clause = "timestamp ASC"
 
         rows = []
-        if self._embedder:
-            try:
-                q_emb = self._embedder.embed_query(query)
-                from hermes_cli.arcadedb import ArcadeDBAdapter
-                qv = ArcadeDBAdapter._vec(q_emb.dense)
-                rows = self._adapter.query(
-                    f"SELECT @rid as rid, session_id, role, content, "
-                    "timestamp, tool_name "
-                    "FROM Message "
-                    f"WHERE @rid IN [ expand(vector.neighbors('Message[embedding]', {qv}, {limit * 2})) ] "
-                    f"{active_clause}{filter_clause} "
-                    f"ORDER BY {sort_clause} "
-                    f"LIMIT {limit} SKIP {offset}"
-                )
-            except Exception:
-                pass  # fall through to LIKE
+        # Skip vector.neighbors — HTTP API cannot serialize 1024d float arrays
+        # inline (body size / parsing issue). Always use LIKE fallback.
 
         # LIKE fallback (primary for CJK, secondary for non-embedded)
         if not rows:
