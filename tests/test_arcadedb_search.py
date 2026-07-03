@@ -1,5 +1,6 @@
 """Tests for search over ArcadeDB — FTS5 -> Lucene equivalence (Phase 3)."""
 
+import json
 import time
 import uuid
 
@@ -9,6 +10,7 @@ pytestmark = pytest.mark.skip_phase3
 
 try:
     from hermes_cli.arcadedb_session import ArcadedbSessionDB
+    from hermes_cli.arcadedb_helpers import _q
     HAS_SESSION = True
 except ImportError:
     HAS_SESSION = False
@@ -17,7 +19,7 @@ _SEEDED = False
 
 
 def _seed_search_data(session_db):
-    """Seed sessions + messages once per process (unique IDs, Lucene delay)."""
+    """Seed sessions + messages + SearchMatter once per process."""
     global _SEEDED
     pref = uuid.uuid4().hex[:6]
     s1 = f"s-{pref}-1"
@@ -36,7 +38,30 @@ def _seed_search_data(session_db):
     ]
     for sid, role, content in msgs:
         session_db.append_message(sid, role=role, content=content)
+
     if not _SEEDED:
+        # Create SearchMatter for hybrid search (CQRS read model)
+        from hermes_cli.arcadedb import ArcadeDBAdapter
+        summaries = {
+            s1: "kubernetes deployment discussion",
+            s2: "error logs and timeout investigation",
+            s3: "daily cron summary",
+        }
+        models = {s1: "gpt-4", s2: "gpt-4", s3: "deepseek"}
+        sources = {s1: "cli", s2: "telegram", s3: "cron"}
+        for sid in (s1, s2, s3):
+            session = session_db.get_session(sid)
+            emb = session_db._embedder.embed([summaries[sid]])[0]
+            session_db._adapter.execute(
+                "INSERT INTO SearchMatter SET "
+                f"session_rid = {_q(session['@rid'])}, "
+                f"summary = {_q(summaries[sid])}, "
+                f"keywords = {_q(json.dumps(summaries[sid].split()))}, "
+                f"embedding = {ArcadeDBAdapter._vec(emb.dense)}, "
+                f"profile = {_q(sources[sid])}, "
+                f"model = {_q(models[sid])}, "
+                f"created_at = {time.time()}"
+            )
         time.sleep(10)
         _SEEDED = True
 

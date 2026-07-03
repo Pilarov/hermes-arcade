@@ -1163,6 +1163,13 @@ class ArcadedbSessionDB:
 
         def _do(cur):
             cur.execute(
+                f"SELECT holder FROM CompressionLock "
+                f"WHERE session_id = {_q(session_id)} AND expires_at > {_n(now_ts)}"
+            )
+            rows = cur.fetchall()
+            if rows:
+                return False  # Lock already held
+            cur.execute(
                 f"DELETE FROM CompressionLock WHERE session_id = {_q(session_id)} "
                 f"AND expires_at <= {_n(now_ts)}"
             )
