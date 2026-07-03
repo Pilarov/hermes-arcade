@@ -240,7 +240,7 @@ class TestGatewayPeer:
 
     def test_find_peer(self, arcadedb_session):
         sid = f"gwp-find-{_uid()}"
-        arcadedb_session.create_session(sid, source="test", user_id="user2", session_key="sk2")
+        arcadedb_session.create_session(sid, source="telegram", user_id="user2", session_key="sk2")
         arcadedb_session.record_gateway_session_peer(
             sid, source="telegram", user_id="user2", session_key="sk2"
         )

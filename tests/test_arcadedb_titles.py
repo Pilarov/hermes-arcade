@@ -63,10 +63,13 @@ class TestSessionByTitle:
 
     def test_resolve_by_title(self, arcadedb_session):
         """TL-02b: resolve returns newest session with given title."""
+        import time
         sid1 = f"tl-rt1-{_uid()}"
         sid2 = f"tl-rt2-{_uid()}"
         arcadedb_session.create_session(sid1, source="test")
+        time.sleep(0.1)
         arcadedb_session.create_session(sid2, source="test")
+        time.sleep(0.1)
         arcadedb_session.set_session_title(sid1, "Shared Title")
         arcadedb_session.set_session_title(sid2, "Shared Title")
         resolved = arcadedb_session.resolve_session_by_title("Shared Title")

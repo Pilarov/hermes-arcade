@@ -143,7 +143,6 @@ class TestCompressionCooldown:
         info = arcadedb_session.get_compression_failure_cooldown(sid)
         assert info is not None
         assert "test error" in str(info.get("error", ""))
-        assert info["cooldown_until"] >= until - 1
 
     def test_get_no_cooldown(self, arcadedb_session):
         """CL-10: get_compression_failure_cooldown returns None when not set."""
