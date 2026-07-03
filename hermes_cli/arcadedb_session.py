@@ -1104,18 +1104,18 @@ class ArcadedbSessionDB:
                 f"ORDER BY created_at DESC LIMIT {top_k}"
             )
 
-        # Compute query embedding — pass as JSON array SQL literal 
+        # Compute query embedding via $bytes typed marker (HTTP API)
         from hermes_cli.arcadedb import ArcadeDBAdapter
         q_emb = self._embedder.embed_query(query)
-        qv = ArcadeDBAdapter._vec(q_emb.dense)  # JSON array for SQL
+        qv_marker = ArcadeDBAdapter._vec_to_bytes(q_emb.dense)
 
         where = ""
         kw_sql = ""
-        params: Dict[str, Any] = {"tk2": top_k}
+        params: Dict[str, Any] = {"q": qv_marker, "tk2": top_k}
         fulltext_branch = ""
 
         if keywords:
-            kw_sql = f" WHERE SEARCH_INDEX('SearchMatter[summary]', %(kw)s) = true"
+            kw_sql = f" WHERE SEARCH_INDEX('SearchMatter[summary]', :kw) = true"
             params["kw"] = keywords
         if profile:
             where += f" AND profile = {_q(profile)}"
@@ -1132,10 +1132,10 @@ class ArcadedbSessionDB:
 
         sql = (
             "SELECT FROM `vector.fuse`(\n"
-            f"    `vector.neighbors`('SearchMatter[embedding]', {qv}, {top_k}),\n"
+            f"    `vector.neighbors`('SearchMatter[embedding]', :q, {top_k}),\n"
             f"{fulltext_branch}"
             "    { fusion: 'RRF', groupBy: 'session_rid', groupSize: 1 }\n"
-            ") LIMIT %(tk2)s"
+            ") LIMIT :tk2"
         )
 
         return self._adapter.query(sql, params)
@@ -1153,7 +1153,7 @@ class ArcadedbSessionDB:
         def _do(cur):
             cur.execute(
                 f"DELETE FROM CompressionLock WHERE session_id = {_q(session_id)} "
-                f"AND expires_at < {_n(now_ts)}"
+                f"AND expires_at <= {_n(now_ts)}"
             )
             cur.execute(
                 f"INSERT INTO CompressionLock SET "
