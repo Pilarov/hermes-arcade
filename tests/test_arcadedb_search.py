@@ -8,6 +8,9 @@ Links:
 Validates: BM25 ranking, CJK fallback, snippet generation, hybrid fuse.
 """
 
+import time
+import uuid
+
 import pytest
 
 pytestmark = pytest.mark.skip_phase3
@@ -20,21 +23,27 @@ except ImportError:
 
 
 def _seed_search_data(session_db):
-    """Insert sessions and messages for search tests."""
-    session_db.create_session("search-s1", source="cli", model="gpt-4")
-    session_db.create_session("search-s2", source="telegram", model="gpt-4")
-    session_db.create_session("search-s3", source="cron", model="deepseek")
+    """Insert sessions and messages for search tests (unique IDs per run)."""
+    pref = uuid.uuid4().hex[:6]
+    s1 = f"s-{pref}-1"
+    s2 = f"s-{pref}-2"
+    s3 = f"s-{pref}-3"
+    session_db.create_session(s1, source="cli", model="gpt-4")
+    session_db.create_session(s2, source="telegram", model="gpt-4")
+    session_db.create_session(s3, source="cron", model="deepseek")
 
     msgs = [
-        ("search-s1", "user", "deploy the new kubernetes cluster to production"),
-        ("search-s1", "assistant", "I'll deploy using helm charts"),
-        ("search-s1", "user", "check if the pods are running"),
-        ("search-s2", "user", "show me the error logs from yesterday"),
-        ("search-s2", "assistant", "The logs show a timeout connecting to PostgreSQL"),
-        ("search-s3", "user", "daily cron summary for project alpha"),
+        (s1, "user", "deploy the new kubernetes cluster to production"),
+        (s1, "assistant", "I'll deploy using helm charts"),
+        (s1, "user", "check if the pods are running"),
+        (s2, "user", "show me the error logs from yesterday"),
+        (s2, "assistant", "The logs show a timeout connecting to PostgreSQL"),
+        (s3, "user", "daily cron summary for project alpha"),
     ]
     for sid, role, content in msgs:
         session_db.append_message(sid, role=role, content=content)
+    # Allow Lucene FULL_TEXT index to catch up (async indexing)
+    time.sleep(2)
 
 
 @pytest.mark.skipif(not HAS_SESSION, reason="Phase 3 ArcadedbSessionDB not yet implemented")

@@ -70,6 +70,10 @@ class ArcadeDBAdapter:
             self.description = None
 
         def execute(self, sql: str, params=None) -> None:
+            if isinstance(params, dict):
+                sql = ArcadeDBAdapter._fmt(sql, params)
+            elif isinstance(params, (tuple, list)):
+                sql = ArcadeDBAdapter._fmt_tuple(sql, params)
             self._last_rows = self._adapter._http_execute(sql)
             self.rowcount = len(self._last_rows)
 
