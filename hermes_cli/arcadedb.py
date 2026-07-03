@@ -1,21 +1,18 @@
-"""ArcadeDB adapter: PostgreSQL wire protocol (reads) + HTTP API (writes).
+"""ArcadeDB adapter — HTTP API only (ArcadeDB REST, port 2480).
 
-Phase 2 of ArcadeDB native storage migration.
+Phase 2 of ArcadeDB native storage migration — unified HTTP adapter.
 
-Read path:  psycopg 3.x connection pool (PG wire protocol, port 5432).
-Write path: HTTP API (ArcadeDB REST, port 2480).
-
-The split avoids PG simple query mode pool corruption. Write operations
-(INSERT/UPDATE/DELETE/CREATE/DROP) go to the HTTP API. Read operations
-(SELECT) stay on the PG pool.
+All SQL operations go through the ArcadeDB HTTP API. No PostgreSQL
+wire protocol, no connection pool, no pool corruption. Stateless HTTP
+requests with Basic auth.
 
 Key features:
-  - autocommit=True (ArcadeDB PG plugin limitation)
+  - Single transport: httpx → POST /api/v1/command/{database}
   - dict params auto-converted to string formatting (_fmt)
   - Vector SQL-literal workaround for Jackson float[] bug
-  - Connection pool (min=2, max=10) for reads only
-  - HttpCursor: cursor-like wrapper that sends SQL via HTTP API
-  - transact() uses HttpCursor — no PG pool involvement
+  - HttpCursor: cursor-like wrapper for transaction-style multi-SQL
+  - transact() → HttpCursor (each statement individually via HTTP)
+  - No pg dependency, no connection pool, no pool corruption
 
 Links:
   Phase 2 spec: docs/arcadedb-migration/phase-2-adapter-v2.md
@@ -34,13 +31,9 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import httpx
-import psycopg
-from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool, PoolTimeout
 
 logger = logging.getLogger(__name__)
 
-# Retry config (TD-7)
 _MAX_RETRIES = 3
 _RETRY_DELAY_S = 0.1
 
@@ -64,159 +57,11 @@ class ArcadeDBConfig:
 
 class ArcadeDBAdapter:
 
-    _WRITE_KEYWORDS = (
-        "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER",
-        "TRUNCATE", "GRANT", "REVOKE",
-    )
-
-    def __init__(self, config: Optional[ArcadeDBConfig] = None) -> None:
-        self._cfg = config or ArcadeDBConfig()
-        self._pool: Optional[ConnectionPool] = None
-        self._lock = threading.RLock()
-        self._http: Optional[httpx.Client] = None
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
-    @property
-    def connected(self) -> bool:
-        return self._pool is not None
-
-    def connect(self) -> None:
-        with self._lock:
-            if self._pool is not None:
-                return
-
-            # Create database via HTTP if it doesn't exist
-            self._ensure_database()
-
-            conninfo = (
-                f"host={self._cfg.host} "
-                f"port={self._cfg.port} "
-                f"dbname={self._cfg.database} "
-                f"user={self._cfg.user} "
-                f"password={self._cfg.password} "
-                f"connect_timeout={int(self._cfg.timeout)} "
-                "sslmode=disable"
-            )
-
-            try:
-                self._pool = ConnectionPool(
-                    conninfo=conninfo,
-                    min_size=self._cfg.pool_min,
-                    max_size=self._cfg.pool_max,
-                    timeout=self._cfg.pool_timeout,
-                    open=True,
-                    kwargs={
-                        "autocommit": True,
-                        "row_factory": dict_row,
-                    },
-                )
-                self._check_health()
-            except (PoolTimeout, psycopg.OperationalError) as e:
-                if self._pool is not None:
-                    self._pool.close()
-                    self._pool = None
-                raise ArcadeDBError(f"connection failed: {e}") from e
-
-    def close(self) -> None:
-        with self._lock:
-            if self._pool is not None:
-                self._pool.close()
-                self._pool = None
-            if self._http is not None:
-                self._http.close()
-                self._http = None
-
-    def _check_health(self) -> bool:
-        try:
-            conn = self._pool.getconn()
-            try:
-                conn.execute("SELECT 1")
-                return True
-            finally:
-                self._pool.putconn(conn)
-        except (PoolTimeout, psycopg.OperationalError) as e:
-            raise ArcadeDBError(f"health check failed: {e}") from e
-
-    # ------------------------------------------------------------------
-    # Connection management
-    # ------------------------------------------------------------------
-
-    def get_conn(self):
-        if self._pool is None:
-            raise ArcadeDBError("not connected")
-        return self._pool.getconn()
-
-    def put_conn(self, conn) -> None:
-        if self._pool is not None:
-            self._pool.putconn(conn)
-
-    # ------------------------------------------------------------------
-    # HTTP API — write path (avoids PG pool corruption entirely)
-    # ------------------------------------------------------------------
-
-    def _http_client(self) -> httpx.Client:
-        if self._http is None:
-            self._http = httpx.Client(
-                base_url=f"http://{self._cfg.host}:2480",
-                timeout=httpx.Timeout(self._cfg.timeout),
-            )
-        return self._http
-
-    def _http_auth(self) -> str:
-        creds = f"{self._cfg.user}:{self._cfg.password}"
-        return base64.b64encode(creds.encode()).decode()
-
-    def _ensure_database(self) -> None:
-        """Create database via HTTP if it doesn't exist (idempotent)."""
-        try:
-            client = self._http_client()
-            auth = self._http_auth()
-            db = self._cfg.database
-            client.post(
-                "/api/v1/server",
-                json={"command": f"create database {db}"},
-                headers={"Authorization": f"Basic {auth}"},
-            )
-        except Exception as e:
-            logger.debug("_ensure_database: %s", e)
-
-    def _http_auth(self) -> str:
-        creds = f"{self._cfg.user}:{self._cfg.password}"
-        return base64.b64encode(creds.encode()).decode()
-
-    @classmethod
-    def _is_write(cls, sql: str) -> bool:
-        s = sql.lstrip().upper()
-        if s.startswith("{CYPHER}"):
-            s = s[len("{CYPHER}"):].lstrip()
-        return any(s.startswith(kw) for kw in cls._WRITE_KEYWORDS)
-
-    def _http_execute(self, sql: str) -> List[Dict[str, Any]]:
-        client = self._http_client()
-        resp = client.post(
-            f"/api/v1/command/{self._cfg.database}",
-            json={"language": "sql", "command": sql},
-            headers={"Authorization": f"Basic {self._http_auth()}"},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("result"):
-            result = data["result"]
-            if isinstance(result, list):
-                return [dict(r) if isinstance(r, dict) else {"value": r}
-                        for r in result]
-            return [{"result": str(result)}]
-        return []
-
     class HttpCursor:
-        """Cursor-like object that sends SQL via HTTP API.
+        """Cursor-like wrapper that sends SQL via HTTP API.
 
-        Each execute() sends a single SQL statement to the ArcadeDB REST
-        API (port 2480). This avoids PG simple query mode entirely for
-        writes while providing the same auto-commit semantics.
+        Each execute() sends a single SQL statement via HTTP POST.
+        fetchall()/fetchone() return results from the last execute().
         """
         def __init__(self, adapter: "ArcadeDBAdapter"):
             self._adapter = adapter
@@ -238,15 +83,90 @@ class ArcadeDBAdapter:
             pass
 
     # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def __init__(self, config: Optional[ArcadeDBConfig] = None) -> None:
+        self._cfg = config or ArcadeDBConfig()
+        self._lock = threading.RLock()
+        self._http: Optional[httpx.Client] = None
+        self._connected = False
+
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
+    def connect(self) -> None:
+        with self._lock:
+            if self._connected:
+                return
+            self._http_client()
+            self._check_health()
+            self._connected = True
+
+    def close(self) -> None:
+        with self._lock:
+            if self._http is not None:
+                self._http.close()
+                self._http = None
+            self._connected = False
+
+    def _check_health(self) -> bool:
+        try:
+            rows = self._http_execute("SELECT 1")
+            return bool(rows)
+        except Exception as e:
+            raise ArcadeDBError(f"health check failed: {e}") from e
+
+    # Backward compat stubs (graph_store.py uses these)
+    def get_conn(self):
+        return None
+
+    def put_conn(self, conn) -> None:
+        pass
+
+    # ------------------------------------------------------------------
+    # HTTP transport — the single method everything routes through
+    # ------------------------------------------------------------------
+
+    def _http_client(self) -> httpx.Client:
+        if self._http is None:
+            self._http = httpx.Client(
+                base_url=f"http://{self._cfg.host}:2480",
+                timeout=httpx.Timeout(self._cfg.timeout),
+            )
+        return self._http
+
+    def _http_auth(self) -> str:
+        creds = f"{self._cfg.user}:{self._cfg.password}"
+        return base64.b64encode(creds.encode()).decode()
+
+    def _http_execute(self, sql: str) -> List[Dict[str, Any]]:
+        client = self._http_client()
+        resp = client.post(
+            f"/api/v1/command/{self._cfg.database}",
+            json={"language": "sql", "command": sql},
+            headers={"Authorization": f"Basic {self._http_auth()}"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("result"):
+            result = data["result"]
+            if isinstance(result, list):
+                return [dict(r) if isinstance(r, dict) else {"value": r}
+                        for r in result]
+            return [{"result": str(result)}]
+        return []
+
+    # ------------------------------------------------------------------
     # Transaction API
     # ------------------------------------------------------------------
 
     def transact(self, fn):
-        """Execute fn(cursor) via HTTP API (ArcadeDB REST, port 2480).
+        """Execute fn(cursor) via HTTP API.
 
         Each SQL statement in fn(cursor) is sent individually via HTTP.
-        Semantics match PG simple query mode: each statement auto-commits.
-        No PG pool involvement — completely avoids pool corruption.
+        Each statement auto-commits. No pool, no corruption.
         """
         cur = ArcadeDBAdapter.HttpCursor(self)
         return fn(cur)
@@ -261,83 +181,20 @@ class ArcadeDBAdapter:
         params=None,
         language: str = "sql",
     ) -> List[Dict[str, Any]]:
-        """Execute a SQL command.
+        """Execute a SQL command via HTTP API.
 
-        Write operations go to HTTP API (port 2480). Read operations use
-        the PG connection pool (port 5432). Dict/tuple params are
-        auto-converted to string formatting (_fmt) for ArcadeDB compat.
+        Dict/tuple params are auto-converted to string formatting (_fmt).
+        language='cypher' adds {cypher} prefix.
         """
         if isinstance(params, dict):
             sql = self._fmt(sql, params)
-            params = None
         elif isinstance(params, (tuple, list)):
             sql = self._fmt_tuple(sql, params)
-            params = None
 
         if language == "cypher":
             sql = "{cypher} " + sql
 
-        # Route writes to HTTP API to avoid PG pool corruption
-        if self._is_write(sql):
-            return self._http_execute(sql)
-
-        if self._pool is None:
-            raise ArcadeDBError("not connected")
-
-        conn = self._pool.getconn()
-        cur = conn.cursor()
-        try:
-            if language == "cypher":
-                sql = "{cypher} " + sql
-
-            cur.execute(sql, params)
-
-            try:
-                if cur.description is not None:
-                    rows = [dict(r) for r in cur.fetchall()]
-                else:
-                    rows = [{"rowcount": cur.rowcount}]
-            except Exception:
-                rows = []
-            return rows
-        except Exception as e:
-            err = str(e)
-            if "Transaction not active" in err or "got no result" in err:
-                cur.close()
-                try: conn.close()
-                except: pass
-                # ArcadeDB server may have stale session state.
-                # Use a fresh standalone connection.
-                import psycopg as pg_raw
-                try:
-                    raw_conn = pg_raw.connect(
-                        host=self._cfg.host, port=self._cfg.port,
-                        dbname=self._cfg.database,
-                        user=self._cfg.user, password=self._cfg.password,
-                        connect_timeout=5, sslmode="disable",
-                        autocommit=True, row_factory=dict_row,
-                    )
-                    raw_cur = raw_conn.cursor()
-                    # Clear any stale server-side transaction state
-                    try: raw_cur.execute("ROLLBACK")
-                    except: pass
-                    try: raw_cur.execute("COMMIT")
-                    except: pass
-                    raw_cur.execute(sql, params)
-                    try:
-                        rows = [dict(r) for r in raw_cur.fetchall()] if raw_cur.description else []
-                    except:
-                        rows = []
-                    return rows
-                finally:
-                    try: raw_cur.close()
-                    except: pass
-                    try: raw_conn.close()
-                    except: pass
-            raise ArcadeDBError(err) from e
-        finally:
-            cur.close()
-            self._pool.putconn(conn)
+        return self._http_execute(sql)
 
     def query(
         self,
@@ -349,21 +206,15 @@ class ArcadeDBAdapter:
 
     def execute_script(self, script: str) -> List[Dict[str, Any]]:
         """Execute multi-statement script."""
-        return self.execute(script, language="sqlscript")
+        return self.execute(script, language="sql")
 
     # ------------------------------------------------------------------
-    # Dict-param → string formatting (ArcadeDB simple query compat)
+    # Dict-param → string formatting
     # ------------------------------------------------------------------
 
     @staticmethod
     def _fmt(sql: str, params: dict) -> str:
-        """Replace %(name)s placeholders with SQL-escaped string values.
-
-        ArcadeDB does NOT support extended query protocol, so
-        bind parameters (prepared statements) are not available.
-        This method converts dict-param queries to plain SQL strings
-        with inlined, properly escaped values.
-        """
+        """Replace %(name)s placeholders with SQL-escaped string values."""
         def _repl(m):
             key = m.group(1)
             val = params.get(key)
@@ -379,11 +230,7 @@ class ArcadeDBAdapter:
 
     @staticmethod
     def _fmt_tuple(sql: str, params: tuple) -> str:
-        """Replace %s placeholders with SQL-escaped values from a tuple.
-
-        Uses a simple replace-one-at-a-time loop instead of regex/split
-        to avoid issues with %s inside string literals.
-        """
+        """Replace %s placeholders with SQL-escaped values from a tuple."""
         result = []
         param_idx = 0
         param_list = list(params)
@@ -409,16 +256,12 @@ class ArcadeDBAdapter:
         return "".join(result)
 
     # ------------------------------------------------------------------
-    # Vector workaround (ArcadeDB Jackson float[] bug)
+    # Vector helper
     # ------------------------------------------------------------------
 
     @staticmethod
     def _vec(val: List[float]) -> str:
-        """Format float list as JSON-array SQL literal.
-
-        Workaround for ArcadeDB 26.7.1 Jackson bug:
-        vector arrays CANNOT be passed through parameter binding.
-        """
+        """Format float list as JSON-array SQL literal."""
         return json.dumps([float(x) for x in val], allow_nan=False)
 
     @staticmethod
@@ -427,7 +270,7 @@ class ArcadeDBAdapter:
         return json.loads(s)
 
     # ------------------------------------------------------------------
-    # Retry helper (TD-7)
+    # Retry helper
     # ------------------------------------------------------------------
 
     def _retry(self, fn, *args, **kwargs):

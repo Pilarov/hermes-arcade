@@ -112,9 +112,10 @@ class ArcadeDBLifecycle:
             "--name", _CONTAINER_NAME,
             "-p", f"{self._cfg.port}:5432",
             "-p", f"{self._cfg.http_port}:2480",
-            "-e", f"ARCADEDB_ROOT_PASSWORD={self._cfg.password}",
-            "-e", f"JAVA_OPTS=-Xmx{self._cfg.memory_limit} -Xms256m "
-                  f"-Darcadedb.server.defaultDatabases={self._cfg.database}",
+            "-e", f'JAVA_OPTS=-Darcadedb.server.rootPassword={self._cfg.password} '
+                   f'-Darcadedb.server.plugins=Postgres:com.arcadedb.postgres.PostgresProtocolPlugin '
+                   f'-Darcadedb.server.defaultDatabases={self._cfg.database}[root:{self._cfg.password}] '
+                   f'-Xmx{self._cfg.memory_limit} -Xms256m',
             "-v", f"{data_dir}:/storage",
             "--restart", "unless-stopped",
             self._cfg.docker_image,
@@ -168,26 +169,23 @@ class ArcadeDBLifecycle:
             return False
 
     def is_healthy(self) -> bool:
-        """Check if ArcadeDB responds to a query.
-
-        Uses a raw psycopg connection for health probe (avoids importing
-        ArcadeDBAdapter to prevent circular import with Phase 2).
-        """
+        """Check if ArcadeDB responds via HTTP API."""
         try:
-            import psycopg
-            conn = psycopg.connect(
-                host=self._cfg.host,
-                port=self._cfg.port,
-                dbname=self._cfg.database,
-                user=self._cfg.user,
-                password=self._cfg.password,
-                connect_timeout=3,
+            import httpx
+            resp = httpx.post(
+                f"http://{self._cfg.host}:2480/api/v1/command/{self._cfg.database}",
+                json={"language": "sql", "command": "SELECT 1"},
+                headers={"Authorization": f"Basic {self._http_auth()}"},
+                timeout=3,
             )
-            conn.execute("SELECT 1")
-            conn.close()
-            return True
+            return resp.status_code == 200
         except Exception:
             return False
+
+    def _http_auth(self) -> str:
+        import base64
+        creds = f"{self._cfg.user}:{self._cfg.password}"
+        return base64.b64encode(creds.encode()).decode()
 
     def wait_healthy(self, timeout: float = 30.0, interval: float = 2.0) -> bool:
         """Poll is_healthy() until timeout.

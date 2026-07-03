@@ -59,7 +59,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 TEST_DOCKER_IMAGE = os.environ.get(
-    "ARCADEDB_TEST_IMAGE", "arcadedb/arcadedb:26.7.1"
+    "ARCADEDB_TEST_IMAGE", "arcadedata/arcadedb:26.7.1"
 )
 TEST_CONTAINER_NAME = "hermes-arcadedb-test"
 TEST_DB = os.environ.get("ARCADEDB_TEST_DB", "hermes")
@@ -67,6 +67,11 @@ TEST_USER = os.environ.get("ARCADEDB_TEST_USER", "root")
 TEST_PASSWORD = os.environ.get("ARCADEDB_TEST_PASSWORD", "")
 TEST_PORT = int(os.environ.get("ARCADEDB_TEST_PORT", "5432"))
 TEST_HOST = os.environ.get("ARCADEDB_TEST_HOST", "localhost")
+
+
+def _base64_auth(user: str, password: str) -> str:
+    import base64
+    return base64.b64encode(f"{user}:{password}".encode()).decode()
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +113,10 @@ def arcadedb_container():
                 "docker", "run", "-d",
                 "--name", TEST_CONTAINER_NAME,
                 "-p", f"{TEST_PORT}:5432",
-                "-e", f"ARCADEDB_ROOT_PASSWORD={TEST_PASSWORD}",
+                "-p", "2480:2480",
+                "-e", f"JAVA_OPTS=-Darcadedb.server.rootPassword={TEST_PASSWORD} "
+                       f"-Darcadedb.server.plugins=Postgres:com.arcadedb.postgres.PostgresProtocolPlugin "
+                       f"-Darcadedb.server.defaultDatabases={TEST_DB}[root:{TEST_PASSWORD}]",
                 "-v", f"{data_dir}:/storage",
                 TEST_DOCKER_IMAGE,
             ],
@@ -118,21 +126,22 @@ def arcadedb_container():
     except subprocess.CalledProcessError as e:
         pytest.skip(f"Docker daemon not available: {e.stderr.decode()[:120]}")
 
-    # Wait for health
+    # Wait for health via HTTP
     deadline = time.time() + 60
     while time.time() < deadline:
         try:
-            import psycopg
-            conn = psycopg.connect(
-                host="localhost", port=TEST_PORT,
-                dbname=TEST_DB, user=TEST_USER, password=TEST_PASSWORD,
-                connect_timeout=2,
+            import httpx
+            resp = httpx.post(
+                f"http://localhost:2480/api/v1/command/{TEST_DB}",
+                json={"language": "sql", "command": "SELECT 1"},
+                headers={"Authorization": f"Basic {_base64_auth(TEST_USER, TEST_PASSWORD)}"},
+                timeout=3,
             )
-            conn.execute("SELECT 1")
-            conn.close()
-            break
+            if resp.status_code == 200:
+                break
         except Exception:
-            time.sleep(2)
+            pass
+        time.sleep(2)
     else:
         subprocess.run(["docker", "rm", "-f", TEST_CONTAINER_NAME])
         pytest.fail("ArcadeDB container did not become healthy in 60s")
