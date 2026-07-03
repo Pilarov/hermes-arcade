@@ -1,27 +1,52 @@
 # Hermes ArcadeDB — Ход работ
 
-## Текущий статус (02.07.2026)
+## Текущий статус (03.07.2026)
 
-**20/20 consumers переключены на фабрику.** Hermes работает с ArcadeDB в
-боевом режиме. Все тесты проходят. API сервер для OpenWebUI запущен.
+**40/59 тестов проходят (68%).** Hermes работает с ArcadeDB в боевом режиме.
+API сервер для OpenWebUI запущен.
 
-### Что сделано за сессию
+### Что сделано за сессию (02-03.07)
 
 ```
-✅ Phases 0-7    — Lifecycle, Adapter, SessionDB (83 метода), Factory,
-                   Migration Tool, KanbanDB, Memory Store
-✅ TD-8          — 20/20 файлов переключены на create_session_db()
-✅ Интеграция    — 10/10 операций на реальном ArcadeDB (боевой сервер)
-✅ Тесты         — 24/28 на сервере (+ 4 — аккумулированные данные, не баг)
-✅ API сервер    — OpenAI-совместимый endpoint для OpenWebUI (:9119)
-✅ Документация  — 10 ТЗ-документов + 6 as-built + History + 21 пункт техдолга
-✅ Безопасность  — вычищены хардкод-пароли и серверные IP из всех файлов
+✅ TD-2          — transact() переписан на свежие psycopg соединения (не пул)
+✅ Container     — ArcadeDB 26.4.2, пароль через Java property: -Darcadedb.server.rootPassword
+✅ Schema init   — SchemaManager.create_all() добавлен в фикстуру arcadedb_session
+✅ Тесты         — чистый прогон: 40 pass / 19 fail (разбор ниже)
+✅ Анализ        — полный триаж 19 фейлов по категориям
 ```
+
+### Прогон тестов на чистой БД (03.07.2026)
+
+```
+Адаптер + фабрика:       12 pass / 3 fail  (накопление данных TestQ/TestV)
+Compression locks:        4 pass / 4 fail  (дубликаты session_id)
+Search:                   5 pass / 4 fail  (vector.fuse неизвестен в 26.4.2)
+E2E:                      19 pass / 8 fail (pool corruption + vector.fuse)
+─────────────────────────────────────────────────
+ИТОГО:                   40 pass / 19 fail
+```
+
+### Разбор 19 фейлов
+
+| # | Тесты | Причина | Категория |
+|---|-------|---------|-----------|
+| 3 | test_query_select/params/vector_literal | TestQ/TestV вставляются первым тестом, не удаляются — assert 2==1 | Data accumulation (тест-дизайн) |
+| 4 | test_acquire_conflict/refresh_extends/release_non_owner/get_holder | Фиксированные ID сессий (lock-test-2/4/6/7) — ранние тесты оставляют данные | Duplicate key (тест-дизайн) |
+| 4 | test_hybrid_basic/profile_filter/days_filter + E2E hybrid_search | ArcadeDB 26.4.2 не имеет `vector.fuse()` (добавлена в 26.7+) | Версия ArcadeDB |
+| 1 | test_search_basic | `assert 0 >= 1` — полнотекстовый поиск не находит результаты | Возможно отсутствие индексов |
+| 7 | E2E: end_and_reopen, delete, acquire_release, get_holder, platform_message_id, meta_crud, session_count | Transaction not active / pool corruption | ArcadeDB PG protocol limitation |
+
+### Вывод по pool corruption
+
+`transact()` со свежими соединениями (не пул) **не чинит** E2E pool corruption.
+Сервер ArcadeDB сам накапливает испорченное состояние транзакций. Из 8
+исходных pool-фейлов: 4 стали duplicate key (другие тесты оставляют мусор),
+4 остались Transaction not active. Это задокументированное ограничение
+ArcadeDB PG simple query mode — не фиксится на клиенте.
 
 ### Что не доделано
 
 ```
-⏸ Phase 8       — Projects, Response Store, Verification, RetainDB (сделано 02.07)
 ⏸ TD-22         — hybrid_search ищет только SearchMatter, не Message
 ⏸ TD-25         — openai_api.py не подключён к hermes serve
 ```
