@@ -410,13 +410,16 @@ class ArcadeDBAdapter:
 
     @staticmethod
     def _vec_to_bytes(vec: List[float]) -> Dict[str, str]:
-        """Convert float32 list to $bytes typed marker for HTTP API.
+        """Quantize float32 vector to int8 and return $bytes typed marker.
 
-        ArcadeDB HTTP API accepts vectors via typed markers
-        (see docs: reference/http-api/http.html#vector-http-typed-markers).
-        This packs float32 values into bytes and base64-encodes them.
+        ArcadeDB HTTP API with encoding='INT8' expects one byte per
+        dimension (range [-128, 127], calibrated as value/127.0).
+        Float values are clamped to [-1, 1] before quantization.
         """
-        packed = struct.pack(f'{len(vec)}f', *[float(x) for x in vec])
+        packed = struct.pack(
+            f'{len(vec)}b',
+            *[max(-128, min(127, int(x * 127))) for x in vec],
+        )
         return {"$bytes": base64.b64encode(packed).decode()}
 
     # ------------------------------------------------------------------
