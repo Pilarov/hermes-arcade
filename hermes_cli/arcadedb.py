@@ -206,18 +206,91 @@ class ArcadeDBAdapter:
             return [{"result": str(result)}]
         return []
 
+    def _http_send_script(self, script: str) -> List[Dict[str, Any]]:
+        """Execute sqlscript batch via HTTP (implicit BEGIN/COMMIT).
+
+        The entire script is sent as one HTTP POST. ArcadeDB wraps
+        sqlscript in implicit BEGIN/COMMIT — all statements are atomic.
+        Returns the result of the last statement (if SELECT) or [].
+        """
+        client = self._http_client()
+        resp = client.post(
+            f"/api/v1/command/{self._cfg.database}",
+            json={"language": "sqlscript", "command": script},
+            headers={"Authorization": f"Basic {self._http_auth()}"},
+        )
+        if resp.status_code >= 400:
+            detail = ""
+            try:
+                body = resp.json()
+                detail = body.get("detail", "")
+            except Exception:
+                detail = resp.text
+            raise ArcadeDBError(
+                f"HTTP {resp.status_code}: {detail or resp.text[:200]}"
+            )
+        data = resp.json()
+        if data.get("result"):
+            result = data["result"]
+            if isinstance(result, list):
+                return [dict(r) if isinstance(r, dict) else {"value": r}
+                        for r in result]
+            return [{"result": str(result)}]
+        return []
+
     # ------------------------------------------------------------------
     # Transaction API
     # ------------------------------------------------------------------
 
     def transact(self, fn):
-        """Execute fn(cursor) via HTTP API.
+        """Execute fn(cursor) via sqlscript batch (implicit BEGIN/COMMIT).
 
-        Each SQL statement in fn(cursor) is sent individually via HTTP.
-        Each statement auto-commits. No pool, no corruption.
+        All SQL statements in fn(cursor) are collected and sent as one
+        HTTP POST with language='sqlscript'. ArcadeDB wraps sqlscript
+        in implicit BEGIN/COMMIT — data is visible across statements.
+        fetchall()/fetchone() flush the accumulated SQL and return results.
+        Subsequent execute() calls start a new batch.
         """
-        cur = ArcadeDBAdapter.HttpCursor(self)
-        return fn(cur)
+        collector = ArcadeDBAdapter._SqlCollector(self)
+        return fn(collector)
+
+    class _SqlCollector:
+        """Collects SQL, sends as sqlscript batch on fetchall()."""
+        def __init__(self, adapter):
+            self._adapter = adapter
+            self._sqls: list = []
+            self._last_rows: list = []
+            self.rowcount = 0
+            self.description = None
+
+        def execute(self, sql, params=None):
+            if isinstance(params, dict):
+                sql = ArcadeDBAdapter._fmt(sql, params)
+            elif isinstance(params, (tuple, list)):
+                sql = ArcadeDBAdapter._fmt_tuple(sql, params)
+            self._sqls.append(sql)
+
+        def execute_strict(self, sql):
+            self._sqls.append(sql)
+
+        def fetchall(self):
+            self._flush()
+            return self._last_rows
+
+        def fetchone(self):
+            self._flush()
+            return self._last_rows[0] if self._last_rows else None
+
+        def _flush(self):
+            if not self._sqls:
+                return
+            script = ";".join(self._sqls)
+            self._sqls = []
+            self._last_rows = self._adapter._http_send_script(script)
+            self.rowcount = len(self._last_rows)
+
+        def close(self):
+            pass
 
     # ------------------------------------------------------------------
     # Query API
