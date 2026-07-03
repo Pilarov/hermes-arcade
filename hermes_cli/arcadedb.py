@@ -57,14 +57,22 @@ class ArcadeDBConfig:
 
 class ArcadeDBAdapter:
 
-    class HttpCursor:
-        """Cursor-like wrapper that sends SQL via HTTP API.
+    class SqlCollector:
+        """Collects SQL statements, sends them as a single sqlscript batch.
 
-        Each execute() sends a single SQL statement via HTTP POST.
-        fetchall()/fetchone() return results from the last execute().
+        Each execute() / execute_strict() appends SQL to an internal buffer.
+        fetchall() / fetchone() sends the accumulated batch as one HTTP POST
+        with language="sqlscript". ArcadeDB wraps sqlscript in implicit
+        BEGIN/COMMIT — all statements are atomic, and data is visible across
+        statements within the same batch.
+
+        If the last statement is a SELECT, its results are returned.
+        If any statement fails, the entire batch is rolled back and
+        ArcadeDBError is raised.
         """
         def __init__(self, adapter: "ArcadeDBAdapter"):
             self._adapter = adapter
+            self._sqls: List[str] = []
             self._last_rows: List[Dict[str, Any]] = []
             self.rowcount = 0
             self.description = None
@@ -74,18 +82,23 @@ class ArcadeDBAdapter:
                 sql = ArcadeDBAdapter._fmt(sql, params)
             elif isinstance(params, (tuple, list)):
                 sql = ArcadeDBAdapter._fmt_tuple(sql, params)
-            self._last_rows = self._adapter._http_execute(sql)
+            self._sqls.append(sql)
 
         def execute_strict(self, sql: str) -> None:
-            self._last_rows = self._adapter._http_execute_strict(sql)
-            self.rowcount = len(self._last_rows)
-            self.rowcount = len(self._last_rows)
+            self._sqls.append(sql)
 
         def fetchall(self) -> List[Dict[str, Any]]:
+            if not self._sqls:
+                return self._last_rows
+            script = ";".join(self._sqls)
+            self._sqls = []
+            self._last_rows = self._adapter._http_send_script(script)
+            self.rowcount = len(self._last_rows)
             return self._last_rows
 
         def fetchone(self) -> Optional[Dict[str, Any]]:
-            return self._last_rows[0] if self._last_rows else None
+            rows = self.fetchall()
+            return rows[0] if rows else None
 
         def close(self) -> None:
             pass
@@ -164,20 +177,35 @@ class ArcadeDBAdapter:
         return base64.b64encode(creds.encode()).decode()
 
     def _http_execute(self, sql: str) -> List[Dict[str, Any]]:
-        """Execute SQL via HTTP, ignoring idempotency errors.
-
-        'already exists'/'already defined'/'already assigned' errors
-        are silently ignored (return []). All other errors raise ArcadeDBError.
-        """
+        """Execute SQL via HTTP, ignoring idempotency errors."""
         return self._http_send(sql, ignore_already_errors=True)
 
-    def _http_execute_strict(self, sql: str) -> List[Dict[str, Any]]:
-        """Execute SQL via HTTP, raising ALL errors (including duplicates).
-
-        Used by CAS operations (try_acquire_compression_lock) that need
-        to detect duplicate key violations.
-        """
-        return self._http_send(sql, ignore_already_errors=False)
+    def _http_send_script(self, script: str) -> List[Dict[str, Any]]:
+        """Execute sqlscript batch via HTTP (implicit BEGIN/COMMIT)."""
+        client = self._http_client()
+        resp = client.post(
+            f"/api/v1/command/{self._cfg.database}",
+            json={"language": "sqlscript", "command": script},
+            headers={"Authorization": f"Basic {self._http_auth()}"},
+        )
+        if resp.status_code >= 400:
+            detail = ""
+            try:
+                body = resp.json()
+                detail = body.get("detail", "")
+            except Exception:
+                detail = resp.text
+            raise ArcadeDBError(
+                f"HTTP {resp.status_code}: {detail or resp.text[:200]}"
+            )
+        data = resp.json()
+        if data.get("result"):
+            result = data["result"]
+            if isinstance(result, list):
+                return [dict(r) if isinstance(r, dict) else {"value": r}
+                        for r in result]
+            return [{"result": str(result)}]
+        return []
 
     def _http_send(
         self, sql: str, ignore_already_errors: bool = True,
@@ -216,13 +244,16 @@ class ArcadeDBAdapter:
     # ------------------------------------------------------------------
 
     def transact(self, fn):
-        """Execute fn(cursor) via HTTP API.
+        """Execute fn(cursor) via sqlscript batch (implicit BEGIN/COMMIT).
 
-        Each SQL statement in fn(cursor) is sent individually via HTTP.
-        Each statement auto-commits. No pool, no corruption.
+        All SQL statements in fn(cursor) are collected into a single
+        sqlscript batch and sent as one HTTP POST. ArcadeDB wraps
+        sqlscript in implicit BEGIN/COMMIT — data is visible across
+        statements. If any statement fails, the entire batch is rolled
+        back and ArcadeDBError is raised.
         """
-        cur = ArcadeDBAdapter.HttpCursor(self)
-        return fn(cur)
+        collector = ArcadeDBAdapter.SqlCollector(self)
+        return fn(collector)
 
     # ------------------------------------------------------------------
     # Query API
