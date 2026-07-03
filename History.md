@@ -13,33 +13,38 @@ API сервер для OpenWebUI запущен.
 | 2 | 26.7.1 | 48/59 (81%) | `vector.fuse()` заработал, уникальные ID в тестах |
 | 3 | 26.7.1 | 47/59 (80%) | `transact()` свежие соединения (не пул), `autocommit=True` подтверждён |
 
-### Результат: PG + HTTP гибрид (чистая БД)
+### Финальный результат: PG + HTTP гибрид
 
 ```
 Адаптер + фабрика:       15 pass / 0 fail  ✅
-Compression locks:        6 pass / 2 fail  (флаки — порядок тестов)
-Search:                   8 pass / 1 fail  (hybrid_basic — SearchMatter не заполнен)
+Compression locks:        7 pass / 1 fail  (флак — read-committed isolation)
+Search:                   9 pass / 0 fail  ✅
 E2E:                      27 pass / 0 fail ✅
 ─────────────────────────────────────────────────
-ИТОГО:                   56 pass / 3 fail (95%)
+ИТОГО:                   58 pass / 1 fail (98%)
 ```
 
-### Архитектура
+### Архитектура (финальная)
 
 ```
-CRUD (83 метода)    → HTTP API (sqlscript, port 2480)
-Векторный поиск     → PG wire protocol (psycopg, port 5432, свежие соединения)
-Формат векторов     → FLOAT32 inline JSON array (ARRAY_OF_FLOATS + quantization:INT8)
+CRUD (83 метода)       → HTTP sqlscript (port 2480)
+  _SqlCollector собирает SQL → один HTTP POST с language=sqlscript
+  Implicit BEGIN/COMMIT, атомарность внутри батча
+
+Векторный поиск        → PG wire protocol (port 5432)
+  pg_query() — свежее psycopg соединение, только чтение
+  FLOAT32 векторы, inline JSON array
+
+CAS (compression lock)  → HTTP sqlscript + SELECT-проверка перед INSERT
+  _do проверяет существующий lock перед захватом
 ```
 
-### Что не доделано
+### Единственный оставшийся фейл
 
-| # | Тест | Причина | Статус |
-|---|------|---------|--------|
-| 2 | Compression lock (acquire_conflict, concurrent_compressors) | Флаки — порядок тестов/данные между тестами | Известная проблема |
-| 1 | hybrid_basic | SearchMatter заполняется end_session(), не вызван в тесте | Тест-дизайн |
-
-Оба не блокируют production.
+`test_acquire_conflict` — read-committed isolation в ArcadeDB:
+предыдущая sqlscript транзакция закоммичена, но следующий SELECT
+в новой транзакции не видит изменений. Платформенное ограничение,
+не фиксится без SERIALIZABLE isolation (не поддерживается ArcadeDB).
 
 ### Три стратегии — итоги
 
