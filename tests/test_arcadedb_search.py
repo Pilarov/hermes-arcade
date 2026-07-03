@@ -43,7 +43,7 @@ def _seed_search_data(session_db):
     for sid, role, content in msgs:
         session_db.append_message(sid, role=role, content=content)
     # Allow Lucene FULL_TEXT index to catch up (async indexing)
-    time.sleep(2)
+    time.sleep(5)
 
 
 @pytest.mark.skipif(not HAS_SESSION, reason="Phase 3 ArcadedbSessionDB not yet implemented")
