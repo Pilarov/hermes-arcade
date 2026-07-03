@@ -1,12 +1,4 @@
-"""Tests for search over ArcadeDB — FTS5 -> Lucene equivalence (Phase 3).
-
-Links:
-  Phase 3: hermes_cli/arcadedb_session.py (search_messages, hybrid_search)
-  Phase 3 spec: docs/arcadedb-migration/phase-3-sessiondb.md#search
-  Fixtures: tests/fixtures/arcadedb_fixtures.py
-
-Validates: BM25 ranking, CJK fallback, snippet generation, hybrid fuse.
-"""
+"""Tests for search over ArcadeDB — FTS5 -> Lucene equivalence (Phase 3)."""
 
 import time
 import uuid
@@ -21,9 +13,12 @@ try:
 except ImportError:
     HAS_SESSION = False
 
+_SEEDED = False
+
 
 def _seed_search_data(session_db):
-    """Insert sessions and messages for search tests (unique IDs per run)."""
+    """Seed sessions + messages once per process (unique IDs, Lucene delay)."""
+    global _SEEDED
     pref = uuid.uuid4().hex[:6]
     s1 = f"s-{pref}-1"
     s2 = f"s-{pref}-2"
@@ -31,7 +26,6 @@ def _seed_search_data(session_db):
     session_db.create_session(s1, source="cli", model="gpt-4")
     session_db.create_session(s2, source="telegram", model="gpt-4")
     session_db.create_session(s3, source="cron", model="deepseek")
-
     msgs = [
         (s1, "user", "deploy the new kubernetes cluster to production"),
         (s1, "assistant", "I'll deploy using helm charts"),
@@ -42,8 +36,9 @@ def _seed_search_data(session_db):
     ]
     for sid, role, content in msgs:
         session_db.append_message(sid, role=role, content=content)
-    # Allow Lucene FULL_TEXT index to catch up (async indexing)
-    time.sleep(5)
+    if not _SEEDED:
+        time.sleep(10)
+        _SEEDED = True
 
 
 @pytest.mark.skipif(not HAS_SESSION, reason="Phase 3 ArcadedbSessionDB not yet implemented")

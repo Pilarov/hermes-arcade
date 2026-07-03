@@ -75,6 +75,10 @@ class ArcadeDBAdapter:
             elif isinstance(params, (tuple, list)):
                 sql = ArcadeDBAdapter._fmt_tuple(sql, params)
             self._last_rows = self._adapter._http_execute(sql)
+
+        def execute_strict(self, sql: str) -> None:
+            self._last_rows = self._adapter._http_execute_strict(sql)
+            self.rowcount = len(self._last_rows)
             self.rowcount = len(self._last_rows)
 
         def fetchall(self) -> List[Dict[str, Any]]:
@@ -160,6 +164,24 @@ class ArcadeDBAdapter:
         return base64.b64encode(creds.encode()).decode()
 
     def _http_execute(self, sql: str) -> List[Dict[str, Any]]:
+        """Execute SQL via HTTP, ignoring idempotency errors.
+
+        'already exists'/'already defined'/'already assigned' errors
+        are silently ignored (return []). All other errors raise ArcadeDBError.
+        """
+        return self._http_send(sql, ignore_already_errors=True)
+
+    def _http_execute_strict(self, sql: str) -> List[Dict[str, Any]]:
+        """Execute SQL via HTTP, raising ALL errors (including duplicates).
+
+        Used by CAS operations (try_acquire_compression_lock) that need
+        to detect duplicate key violations.
+        """
+        return self._http_send(sql, ignore_already_errors=False)
+
+    def _http_send(
+        self, sql: str, ignore_already_errors: bool = True,
+    ) -> List[Dict[str, Any]]:
         client = self._http_client()
         resp = client.post(
             f"/api/v1/command/{self._cfg.database}",
@@ -173,8 +195,7 @@ class ArcadeDBAdapter:
                 detail = body.get("detail", "")
             except Exception:
                 detail = resp.text
-            # Ignore "already exists" — idempotent schema creation
-            if any(marker in detail for marker in (
+            if ignore_already_errors and any(marker in detail for marker in (
                 "already exists", "already defined", "already assigned",
             )):
                 return []

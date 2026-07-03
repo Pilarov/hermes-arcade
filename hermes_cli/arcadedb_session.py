@@ -1160,11 +1160,19 @@ class ArcadedbSessionDB:
                 f"AND expires_at < {_n(now_ts)}"
             )
             try:
-                cur.execute(
-                    f"INSERT INTO CompressionLock SET "
-                    f"session_id = {_q(session_id)}, holder = {_q(holder)}, "
-                    f"acquired_at = {_n(now_ts)}, expires_at = {_n(expires)}"
-                )
+                # Use strict mode to catch duplicate key via ArcadeDBError
+                if hasattr(cur, 'execute_strict'):
+                    cur.execute_strict(
+                        f"INSERT INTO CompressionLock SET "
+                        f"session_id = {_q(session_id)}, holder = {_q(holder)}, "
+                        f"acquired_at = {_n(now_ts)}, expires_at = {_n(expires)}"
+                    )
+                else:
+                    cur.execute(
+                        f"INSERT INTO CompressionLock SET "
+                        f"session_id = {_q(session_id)}, holder = {_q(holder)}, "
+                        f"acquired_at = {_n(now_ts)}, expires_at = {_n(expires)}"
+                    )
             except ArcadeDBError:
                 return False
             cur.execute(
@@ -1248,20 +1256,16 @@ class ArcadedbSessionDB:
         return rows[0].get("value") if rows else None
 
     def set_meta(self, key: str, value: str) -> None:
-        # Find existing vertex and delete by @rid (DELETE VERTEX WHERE key=... hangs)
+        self._adapter.execute(
+            f"UPDATE StateMeta SET value = {_q(value)} WHERE key = {_q(key)}"
+        )
         existing = self._adapter.query(
             f"SELECT @rid FROM StateMeta WHERE key = {_q(key)} LIMIT 1"
         )
-        if existing:
-            try:
-                self._adapter.execute(
-                    f"DELETE VERTEX StateMeta WHERE @rid = {_q(existing[0]['@rid'])}"
-                )
-            except Exception:
-                pass  # already deleted or ArcadeDB issue
-        self._adapter.execute(
-            f"CREATE VERTEX StateMeta SET key = {_q(key)}, value = {_q(value)}"
-        )
+        if not existing:
+            self._adapter.execute(
+                f"CREATE VERTEX StateMeta SET key = {_q(key)}, value = {_q(value)}"
+            )
 
     # ==================================================================
     # Session Deletion & Maintenance

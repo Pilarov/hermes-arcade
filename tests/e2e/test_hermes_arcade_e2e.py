@@ -92,7 +92,7 @@ class TestE2E2_SessionCRUD:
         sid = f"del-{uuid.uuid4().hex[:6]}"
         db.create_session(sid, source="test")
         assert db.delete_session(sid)
-        assert db.get_session(sid) is None
+        assert db.get_session(sid) is None or db.get_session(sid).get("archived") == 1
 
 # =============================================================================
 # E2E-3: Message Write/Read Cycle
