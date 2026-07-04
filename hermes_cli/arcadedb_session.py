@@ -366,7 +366,7 @@ class ArcadedbSessionDB:
     def resolve_session_by_title(self, title: str) -> Optional[str]:
         rows = self._adapter.query(
             "SELECT id, started_at FROM Session WHERE title = %s "
-            "ORDER BY started_at DESC LIMIT 1", (title,)
+            "ORDER BY started_at DESC, @rid DESC LIMIT 1", (title,)
         )
         return rows[0]["id"] if rows else None
 
@@ -1173,6 +1173,7 @@ class ArcadedbSessionDB:
                 if rows:
                     return False  # Lock already held
                 time.sleep(0.05)
+            cur.execute("BEGIN")
             cur.execute(
                 f"DELETE FROM CompressionLock WHERE session_id = {_q(session_id)} "
                 f"AND expires_at <= {_n(now_ts)}"
@@ -1185,6 +1186,7 @@ class ArcadedbSessionDB:
             cur.execute(
                 f"SELECT holder FROM CompressionLock WHERE session_id = {_q(session_id)}"
             )
+            cur.execute("COMMIT RETRY 10")
             rows = cur.fetchall()
             return bool(rows and rows[0]["holder"] == holder)
 
