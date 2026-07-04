@@ -209,16 +209,11 @@ class ArcadeDBAdapter:
         return []
 
     def _http_send_script(self, script: str) -> List[Dict[str, Any]]:
-        """Execute batch via HTTP.
-
-        If script starts with BEGIN → 'sql' (explicit transaction).
-        Otherwise → 'sqlscript' (implicit BEGIN/COMMIT).
-        """
+        """Execute sqlscript batch via HTTP (implicit BEGIN/COMMIT)."""
         client = self._http_client()
-        language = "sql" if script.lstrip().upper().startswith("BEGIN") else "sqlscript"
         resp = client.post(
             f"/api/v1/command/{self._cfg.database}",
-            json={"language": language, "command": script},
+            json={"language": "sqlscript", "command": script},
             headers={"Authorization": f"Basic {self._http_auth()}"},
         )
         if resp.status_code >= 400:

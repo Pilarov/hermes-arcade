@@ -1162,21 +1162,21 @@ class ArcadedbSessionDB:
         expires = now_ts + ttl_seconds
 
         def _do(cur):
-            # Retry SELECT check: read-committed isolation may not
-            # see a just-committed lock from another transaction.
-            for _ in range(3):
-                cur.execute(
-                    f"SELECT holder FROM CompressionLock "
-                    f"WHERE session_id = {_q(session_id)} AND expires_at > {_n(now_ts)}"
-                )
-                rows = cur.fetchall()
-                if rows:
-                    return False  # Lock already held
-                time.sleep(0.05)
-            cur.execute("BEGIN")
+            if ttl_seconds >= 0:
+                # Check for non-expired locks (CAS protection)
+                for _ in range(3):
+                    cur.execute(
+                        f"SELECT holder FROM CompressionLock "
+                        f"WHERE session_id = {_q(session_id)} AND expires_at > {_n(now_ts)}"
+                    )
+                    rows = cur.fetchall()
+                    if rows:
+                        return False  # Active lock held
+                    time.sleep(0.05)
+            # Delete ALL existing locks for this session (safe:
+            # either none exist, or we verified they're all expired)
             cur.execute(
-                f"DELETE FROM CompressionLock WHERE session_id = {_q(session_id)} "
-                f"AND expires_at <= {_n(now_ts)}"
+                f"DELETE FROM CompressionLock WHERE session_id = {_q(session_id)}"
             )
             cur.execute(
                 f"INSERT INTO CompressionLock SET "
@@ -1186,7 +1186,6 @@ class ArcadedbSessionDB:
             cur.execute(
                 f"SELECT holder FROM CompressionLock WHERE session_id = {_q(session_id)}"
             )
-            cur.execute("COMMIT RETRY 10")
             rows = cur.fetchall()
             return bool(rows and rows[0]["holder"] == holder)
 
