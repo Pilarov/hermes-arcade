@@ -8,6 +8,7 @@ Links:
   Fixtures: tests/fixtures/arcadedb_fixtures.py
 """
 
+import time
 import uuid
 
 import pytest
@@ -34,6 +35,7 @@ class TestHandoffRequest:
         arcadedb_session.create_session(sid, source="test")
         result = arcadedb_session.request_handoff(sid, "telegram")
         assert result is True
+        time.sleep(0.2)
         state = arcadedb_session.get_handoff_state(sid)
         assert state["handoff_state"] == "pending"
         assert state["handoff_platform"] == "telegram"
@@ -49,6 +51,7 @@ class TestHandoffClaim:
         arcadedb_session.request_handoff(sid, "telegram")
         result = arcadedb_session.claim_handoff(sid)
         assert result is True
+        time.sleep(0.2)
         state = arcadedb_session.get_handoff_state(sid)
         assert state["handoff_state"] == "running"
 
@@ -57,6 +60,7 @@ class TestHandoffClaim:
         sid = f"ho-reclaim-{_uid()}"
         arcadedb_session.create_session(sid, source="test")
         arcadedb_session.request_handoff(sid, "telegram")
+        time.sleep(0.2)
         assert arcadedb_session.claim_handoff(sid) is True
         # Second claim must fail
         assert arcadedb_session.claim_handoff(sid) is False
@@ -78,6 +82,7 @@ class TestHandoffComplete:
         arcadedb_session.request_handoff(sid, "telegram")
         arcadedb_session.claim_handoff(sid)
         arcadedb_session.complete_handoff(sid)
+        time.sleep(0.2)
         state = arcadedb_session.get_handoff_state(sid)
         assert state["handoff_state"] == "completed"
 
@@ -92,6 +97,7 @@ class TestHandoffFail:
         arcadedb_session.request_handoff(sid, "telegram")
         arcadedb_session.claim_handoff(sid)
         arcadedb_session.fail_handoff(sid, "timeout error")
+        time.sleep(0.2)
         state = arcadedb_session.get_handoff_state(sid)
         assert state["handoff_state"] == "failed"
         assert "timeout" in str(state.get("handoff_error", ""))
@@ -105,6 +111,7 @@ class TestPendingHandoffs:
         sid = f"ho-pend-{_uid()}"
         arcadedb_session.create_session(sid, source="test")
         arcadedb_session.request_handoff(sid, "telegram")
+        time.sleep(0.2)
         pending = arcadedb_session.list_pending_handoffs()
         assert any(s["id"] == sid for s in pending)
 
@@ -114,5 +121,6 @@ class TestPendingHandoffs:
         arcadedb_session.create_session(sid, source="test")
         arcadedb_session.request_handoff(sid, "telegram")
         arcadedb_session.claim_handoff(sid)
+        time.sleep(0.2)
         pending = arcadedb_session.list_pending_handoffs()
         assert not any(s["id"] == sid for s in pending)

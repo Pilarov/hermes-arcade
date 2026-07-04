@@ -9,6 +9,7 @@ Links:
   Fixtures: tests/fixtures/arcadedb_fixtures.py
 """
 
+import time
 import uuid
 
 import pytest
