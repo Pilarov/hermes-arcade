@@ -206,14 +206,13 @@ class TestE2E7_CompressionLocks:
     def test_acquire_release(self, db):
         sid7 = f"lock-{uuid.uuid4().hex[:6]}"
         db.create_session(sid7, source="test")
-        # Acquire
         ok = db.try_acquire_compression_lock(sid7, "w1", ttl_seconds=30)
         assert ok
-        # Conflict
+        time.sleep(0.2)  # Read-committed visibility
         ok2 = db.try_acquire_compression_lock(sid7, "w2", ttl_seconds=30)
         assert not ok2
-        # Release
         db.release_compression_lock(sid7, "w1")
+        time.sleep(0.2)
         ok3 = db.try_acquire_compression_lock(sid7, "w3", ttl_seconds=30)
         assert ok3
 
@@ -221,6 +220,7 @@ class TestE2E7_CompressionLocks:
         sid7b = f"lockh-{uuid.uuid4().hex[:6]}"
         db.create_session(sid7b, source="test")
         db.try_acquire_compression_lock(sid7b, "holder-1", ttl_seconds=60)
+        time.sleep(0.2)  # Read-committed visibility
         h = db.get_compression_lock_holder(sid7b)
         assert h == "holder-1"
 

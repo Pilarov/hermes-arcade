@@ -105,12 +105,14 @@ class TestCompressionLocks:
         arcadedb_session.try_acquire_compression_lock(
             sid, "worker-1", ttl_seconds=30
         )
+        time.sleep(0.2)  # Read-committed visibility delay
         assert arcadedb_session.get_compression_lock_holder(sid) == "worker-1"
 
     def test_concurrent_compressors(self, arcadedb_session):
         """CL-08: 10 concurrent acquirers -> exactly 1 wins."""
         sid = f"lock-8-{self._uid()}"
         arcadedb_session.create_session(sid, source="test")
+        time.sleep(0.2)  # Read-committed visibility for session creation
 
         results = []
 
