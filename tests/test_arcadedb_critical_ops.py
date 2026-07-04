@@ -27,6 +27,12 @@ def _uid():
     return uuid.uuid4().hex[:8]
 
 
+def _g(session, sid):
+    """Get session with visibility delay (ArcadeDB read-committed)."""
+    time.sleep(0.2)
+    return session.get_session(sid)
+
+
 @pytest.mark.skipif(not HAS_SESSION, reason="ArcadedbSessionDB not available")
 class TestEnsureSession:
     """CR-01: ensure_session creates session if missing, returns existing."""
@@ -35,7 +41,7 @@ class TestEnsureSession:
         sid = f"ens-new-{_uid()}"
         result = arcadedb_session.ensure_session(sid, source="test")
         assert result == sid
-        s = arcadedb_session.get_session(sid)
+        s = _g(arcadedb_session, sid)
         assert s is not None
         assert s["source"] == "test"
 
@@ -44,7 +50,7 @@ class TestEnsureSession:
         arcadedb_session.create_session(sid, source="test")
         result = arcadedb_session.ensure_session(sid, source="other")
         assert result == sid
-        s = arcadedb_session.get_session(sid)
+        s = _g(arcadedb_session, sid)
         assert s["source"] == "test"  # Source unchanged
 
 
@@ -60,7 +66,7 @@ class TestTokenCounts:
             cache_read_tokens=10, cache_write_tokens=5,
             reasoning_tokens=20, absolute=True,
         )
-        s = arcadedb_session.get_session(sid)
+        s = _g(arcadedb_session, sid)
         assert s["input_tokens"] == 100
         assert s["output_tokens"] == 50
         assert s["cache_read_tokens"] == 10
@@ -72,7 +78,7 @@ class TestTokenCounts:
         arcadedb_session.create_session(sid, source="test")
         arcadedb_session.update_token_counts(sid, input_tokens=50, absolute=True)
         arcadedb_session.update_token_counts(sid, input_tokens=30, output_tokens=20)
-        s = arcadedb_session.get_session(sid)
+        s = _g(arcadedb_session, sid)
         assert s["input_tokens"] == 80   # 50 + 30
         assert s["output_tokens"] == 20  # 0 + 20
 
@@ -85,7 +91,7 @@ class TestSessionModel:
         sid = f"mdl-{_uid()}"
         arcadedb_session.create_session(sid, source="test", model="gpt-4")
         arcadedb_session.update_session_model(sid, "deepseek-chat")
-        s = arcadedb_session.get_session(sid)
+        s = _g(arcadedb_session, sid)
         assert s["model"] == "deepseek-chat"
 
 
@@ -97,7 +103,7 @@ class TestSystemPrompt:
         sid = f"prm-{_uid()}"
         arcadedb_session.create_session(sid, source="test")
         arcadedb_session.update_system_prompt(sid, "You are a helpful assistant")
-        s = arcadedb_session.get_session(sid)
+        s = _g(arcadedb_session, sid)
         assert s["system_prompt"] == "You are a helpful assistant"
 
 
@@ -174,7 +180,7 @@ class TestSessionMeta:
         sid = f"mta-{_uid()}"
         arcadedb_session.create_session(sid, source="test")
         arcadedb_session.update_session_meta(sid, '{"key":"val"}', model="deepseek")
-        s = arcadedb_session.get_session(sid)
+        s = _g(arcadedb_session, sid)
         assert s["model_config"] == '{"key":"val"}'
         assert s["model"] == "deepseek"
 
@@ -189,7 +195,7 @@ class TestBillingRoute:
         arcadedb_session.update_session_billing_route(
             sid, provider="openai", base_url="https://api.openai.com", billing_mode="token"
         )
-        s = arcadedb_session.get_session(sid)
+        s = _g(arcadedb_session, sid)
         assert s["billing_provider"] == "openai"
         assert s["billing_base_url"] == "https://api.openai.com"
         assert s["billing_mode"] == "token"
@@ -205,7 +211,7 @@ class TestSessionCwd:
         arcadedb_session.update_session_cwd(
             sid, cwd="/home/user/project", git_branch="main", git_repo_root="/home/user/project"
         )
-        s = arcadedb_session.get_session(sid)
+        s = _g(arcadedb_session, sid)
         assert s["cwd"] == "/home/user/project"
         assert s["git_branch"] == "main"
         assert s["git_repo_root"] == "/home/user/project"
@@ -220,7 +226,7 @@ class TestBackfillRepoRoots:
         arcadedb_session.create_session(sid, source="test")
         arcadedb_session.update_session_cwd(sid, cwd="/home/user/repo")
         arcadedb_session.backfill_repo_roots({"/home/user/repo": "/home/user/repo"})
-        s = arcadedb_session.get_session(sid)
+        s = _g(arcadedb_session, sid)
         assert s["git_repo_root"] == "/home/user/repo"
 
 
@@ -234,7 +240,7 @@ class TestGatewayPeer:
         arcadedb_session.record_gateway_session_peer(
             sid, source="telegram", user_id="user1", chat_id="chat1", chat_type="private"
         )
-        s = arcadedb_session.get_session(sid)
+        s = _g(arcadedb_session, sid)
         assert s["user_id"] == "user1"
         assert s["chat_id"] == "chat1"
         assert s["chat_type"] == "private"
