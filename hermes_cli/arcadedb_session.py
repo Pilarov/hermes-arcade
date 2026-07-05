@@ -159,13 +159,18 @@ class ArcadedbSessionDB:
         return self.create_session(session_id, source, **kwargs)
 
     def end_session(self, session_id: str, end_reason: str) -> None:
+        # Check if this is the first end (SearchMatter only on first call)
+        session = self.get_session(session_id)
+        is_first_end = session and session.get("ended_at") is None
+
         self._adapter.execute(
             "UPDATE Session SET ended_at = COALESCE(ended_at, %(now)s), "
             "end_reason = COALESCE(end_reason, %(reason)s) WHERE id = %(id)s",
             {"now": _now(), "reason": end_reason, "id": session_id},
         )
-        # Populate SearchMatter CQRS read model for hybrid search
-        self._create_search_matter(session_id)
+        # Populate SearchMatter CQRS read model on first session end
+        if is_first_end:
+            self._create_search_matter(session_id)
 
     def _create_search_matter(self, session_id: str) -> None:
         """Populate SearchMatter vertex for hybrid cross-session search."""
