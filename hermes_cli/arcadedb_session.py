@@ -164,6 +164,51 @@ class ArcadedbSessionDB:
             "end_reason = COALESCE(end_reason, %(reason)s) WHERE id = %(id)s",
             {"now": _now(), "reason": end_reason, "id": session_id},
         )
+        # Populate SearchMatter CQRS read model for hybrid search
+        self._create_search_matter(session_id)
+
+    def _create_search_matter(self, session_id: str) -> None:
+        """Populate SearchMatter vertex for hybrid cross-session search."""
+        if not self._embedder:
+            return
+        try:
+            session = self.get_session(session_id)
+            if not session:
+                return
+            session_rid = session.get("@rid")
+            if not session_rid:
+                return
+
+            # Build summary from user messages
+            msgs = self.get_messages(session_id, include_inactive=False)
+            user_msgs = [
+                str(_decode_content(m.get("content", "")))
+                for m in msgs if m.get("role") == "user"
+            ]
+            if not user_msgs:
+                return
+            summary = " ".join(user_msgs[:5])[:500]
+            keywords = list({w.lower() for w in summary.split() if len(w) > 3})[:20]
+
+            from hermes_cli.arcadedb import ArcadeDBAdapter
+            emb = self._embedder.embed([summary])[0]
+            qv = ArcadeDBAdapter._vec(emb.dense)
+
+            source = session.get("source", "")
+            model = session.get("model", "")
+
+            self._adapter.execute(
+                f"INSERT INTO SearchMatter SET "
+                f"session_rid = {_q(session_rid)}, "
+                f"summary = {_q(summary)}, "
+                f"keywords = {_q(json.dumps(keywords))}, "
+                f"embedding = {qv}, "
+                f"profile = {_q(source)}, "
+                f"model = {_q(model)}, "
+                f"created_at = {_n(_now())}"
+            )
+        except Exception:
+            pass  # SearchMatter is best-effort, don't block end_session
 
     def reopen_session(self, session_id: str) -> None:
         self._adapter.execute(

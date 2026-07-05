@@ -60,7 +60,7 @@ class TestSearchMatter:
     """SM-01: SearchMatter CQRS — create + hybrid_search + search_messages."""
 
     def test_create_and_hybrid_search(self, arcadedb_session):
-        """Create SearchMatter, search via hybrid_search_sessions."""
+        """end_session() auto-creates SearchMatter → hybrid_search_sessions finds it."""
         pref = _uid()
         sid = f"sm-{pref}"
         arcadedb_session.create_session(sid, source="cli", model="gpt-4")
@@ -68,17 +68,39 @@ class TestSearchMatter:
         arcadedb_session.append_message(sid, "assistant", "I'll deploy using helm charts")
         arcadedb_session.append_message(sid, "user", "check if pods are running")
 
-        # Manually create SearchMatter (end_session doesn't wire this)
-        _seed_search_matter(arcadedb_session, sid, "kubernetes deployment discussion", "cli", "gpt-4")
+        # end_session triggers _create_search_matter automatically
+        arcadedb_session.end_session(sid, "agent_close")
+        time.sleep(2)  # Lucene + vector index build delay
 
         # Search via hybrid_search_sessions
         results = arcadedb_session.hybrid_search_sessions(
             query="kubernetes deployment", top_k=5,
         )
         assert len(results) >= 1, f"Expected >=1 hybrid search result, got {len(results)}"
-        # Should find our session
-        sids = [r.get("session_id", r.get("id", "")) for r in results]
-        assert sid in sids or len(results) >= 1, f"Session {sid} not in results: {sids[:3]}"
+
+    def test_search_matter_auto_created(self, arcadedb_session):
+        """end_session() creates exactly one SearchMatter vertex per session."""
+        pref = _uid()
+        sid = f"sma-{pref}"
+        arcadedb_session.create_session(sid, source="cli", model="gpt-4")
+        arcadedb_session.append_message(sid, "user", "test message for search matter")
+
+        # Before end_session — no SearchMatter
+        session = arcadedb_session.get_session(sid)
+        sm_before = arcadedb_session._adapter.query(
+            f"SELECT FROM SearchMatter WHERE session_rid = {session['@rid']}"
+        )
+        assert len(sm_before) == 0, "No SearchMatter before end_session"
+
+        arcadedb_session.end_session(sid, "agent_close")
+        time.sleep(2)
+
+        # After end_session — SearchMatter exists
+        sm_after = arcadedb_session._adapter.query(
+            f"SELECT FROM SearchMatter WHERE session_rid = {session['@rid']}"
+        )
+        assert len(sm_after) >= 1, f"Expected SearchMatter after end_session, got {len(sm_after)}"
+        assert sm_after[0].get("summary"), "SearchMatter should have a summary"
 
     def test_search_messages_vector(self, arcadedb_session):
         """search_messages via pg_query vector.neighbors finds results."""
