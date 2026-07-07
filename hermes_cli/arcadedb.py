@@ -194,6 +194,10 @@ class ArcadeDBAdapter:
                 "already exists", "already defined", "already assigned",
             )):
                 return []
+            raise ArcadeDBError(
+                f"HTTP {resp.status_code}: {detail}"
+            )
+        return resp.json().get("result", [])
     def _http_send_script(self, script: str) -> List[Dict[str, Any]]:
         """Execute sqlscript batch via HTTP (implicit BEGIN/COMMIT)."""
         client = self._http_client()
