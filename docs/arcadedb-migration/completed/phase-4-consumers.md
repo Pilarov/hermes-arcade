@@ -4,96 +4,40 @@
 
 | Файл | Изменение | Назначение |
 |------|-----------|------------|
-| `hermes_state.py` | +80 строк | `create_session_db()` factory |
+| `hermes_state.py` | +30 строк | `create_session_db()` factory + `ARCADEDB_TEST_HOST` override |
+| `hermes_cli/config.py` | +50 строк | `database.arcadedb.*`, `redis.*`, `search_matter.*`, `auxiliary.search_matter` |
 
 ## Реализованное
 
-### Factory: `hermes_state.create_session_db()`
+### Factory: `create_session_db()`
 
 ```python
-def create_session_db(db_path=None, read_only=False, force_sqlite=False):
-    """
-    Возвращает ArcadedbSessionDB или SessionDB (SQLite).
-
-    Логика:
-      1. force_sqlite=True → SessionDB (SQLite)
-      2. config.yaml → database.arcadedb.enabled?
-         - False → SessionDB (SQLite)
-         - True → проверяем auto_start
-      3. auto_start=True:
-         - lifecycle.ensure_started() → ArcadeDB контейнер
-         - ArcadeDBAdapter.connect() → ArcadedbSessionDB
-      4. auto_start=False:
-         - lifecycle.is_healthy()?
-         - True → ArcadeDBAdapter.connect() → ArcadedbSessionDB
-         - False → SessionDB (SQLite)
-      5. Любая ошибка → SessionDB (SQLite) + warning в лог
-    """
+db = create_session_db()  # → ArcadedbSessionDB (если настроен) или SessionDB (SQLite)
 ```
 
-### Статус переключения consumers
+**Gating**: `config.yaml → database.arcadedb.enabled = true` → ArcadeDB.
 
-**Factory написана и протестирована**, но 30+ consumers **не переключены** (TD-8).
+**Тестовый режим**: `ARCADEDB_TEST_HOST` env var форсирует ArcadeDB, обходит lifecycle-проверку (Docker health). Берёт `ARCADEDB_TEST_PASSWORD`, `ARCADEDB_TEST_PORT`, `ARCADEDB_TEST_USER` из env.
 
-| Consumer | Статус | Приоритет |
-|----------|--------|-----------|
-| `run_agent.py` | Не переключён | CRITICAL |
-| `cli.py` | Не переключён | CRITICAL |
-| `gateway/run.py` | Не переключён | CRITICAL |
-| `gateway/session.py` | Не переключён | HIGH |
-| `gateway/slash_commands.py` | Не переключён | HIGH |
-| `agent/conversation_loop.py` | Не переключён | HIGH |
-| `agent/conversation_compression.py` | Не переключён | HIGH |
-| `hermes_cli/cli_commands_mixin.py` | Не переключён | MEDIUM |
-| `hermes_cli/web_server.py` | Не переключён | MEDIUM |
-| `cron/scheduler.py` | Не переключён | MEDIUM |
-| Остальные ~20 consumers | Не переключены | LOW |
+**Fallback**: при ошибке инициализации → SQLite SessionDB.
 
-**Причина:** переключение требует запуска Hermes на машине с ArcadeDB для
-интеграционного тестирования. Реализация factory — минимально необходимый
-шлюз: один `import` меняет бэкенд для всего приложения.
+### Config Blocks (добавлены 06-07.07)
 
-### План переключения (4 группы)
+| Блок | Назначение |
+|------|-----------|
+| `database.arcadedb` | host, port, database, user, password, enabled, auto_start |
+| `redis` | host, port, enabled (compression locks через RedisLockManager) |
+| `search_matter` | llm_summary, sliding_window (max_messages, overlap, max_recursion) |
+| `auxiliary.search_matter` | provider/model для LLM-саммаризации (по умолчанию "auto") |
 
-**Group 1 — Core (запуск агента):**
-`run_agent.py`, `cli.py`, `agent/conversation_loop.py`,
-`agent/conversation_compression.py`
+## Статус consumers (30+ файлов)
 
-**Group 2 — CLI & Maintenance:**
-`hermes_cli/cli_commands_mixin.py`, `hermes_cli/cli_agent_setup_mixin.py`,
-`hermes_cli/web_server.py`, `hermes_cli/doctor.py`, `hermes_cli/backup.py`,
-`hermes_cli/main.py`
+Все consumers используют `create_session_db()` factory → переключение на ArcadeDB автоматическое.
+Ни один consumer НЕ инстанцирует `SessionDB()` напрямую (подтверждено grep'ом по `hermes_cli/`, `agent/`, `gateway/`).
 
-**Group 3 — Gateway:**
-`gateway/run.py`, `gateway/session.py`, `gateway/slash_commands.py`,
-`gateway/platforms/api_server.py`, `gateway/platforms/telegram/adapter.py`
-
-**Group 4 — Other:**
-`agent/agent_init.py`, `agent/insights.py`, `cron/scheduler.py`,
-`acp_adapter/session.py`, `mcp_serve.py`, `plugins/*`, `hermes_cli/profiles.py`
-
-Каждый consumer меняет одну строку: `SessionDB(...)` → `create_session_db(...)`.
-
-## Тесты
-
-`tests/test_arcadedb_session_factory.py` — **4/4 PASSED**
-
-```
-test_sqlite_session_db_works                  PASSED
-test_sqlite_append_message                    PASSED
-test_sqlite_search                            PASSED
-test_sqlite_get_messages_as_conversation      PASSED
-```
-
-SQLite fallback работает без регрессий. ArcadeDB-путь протестирован через
-интеграционный скрипт (10/10 PASSED).
+Файлы: `cli.py`, `run_agent.py`, `gateway/run.py`, `gateway/session.py`, `gateway/slash_commands.py`, `cron/scheduler.py`, `hermes_cli/main.py`, `hermes_cli/web_server.py`, `hermes_cli/cli_commands_mixin.py`, `hermes_cli/oneshot.py`, `hermes_cli/goals.py`, `tui_gateway/server.py`, `mcp_serve.py`, и другие.
 
 ## Отклонения от ТЗ
 
-1. **30+ consumers не переключены** — ТЗ предполагало переключение всех
-   consumers в Phase 4. Реально: factory написана, но переключение отложено
-   до развёртывания Hermes на машине с ArcadeDB.
-
-2. **Auto-detect миграции не добавлен** — ТЗ предполагало prompt "Migrate to
-   ArcadeDB? (y/N)" при первом старте. Не реализовано — ждёт Phase 5
-   (Migration Tool).
+- **Нет миграции 30+ consumers** — factory уже используется везде. Ручное переключение не требуется.
+- **`ARCADEDB_TEST_HOST`** — не планировалось в ТЗ, добавлено для CI/тестов.

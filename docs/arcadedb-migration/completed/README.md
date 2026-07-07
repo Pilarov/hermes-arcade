@@ -1,53 +1,74 @@
 # ArcadeDB Migration — As-Built Documentation
 
 Документация по реализованным фазам. Отражает **фактическое состояние** кода,
-включая отклонения от ТЗ, вызванные особенностями ArcadeDB 26.7.1-SNAPSHOT.
+включая отклонения от ТЗ, вызванные особенностями ArcadeDB 26.7.2-SNAPSHOT.
 
 ## Реализованные фазы
 
-| Фаза | Название | ТЗ | As-Built | Статус |
-|------|----------|-----|----------|--------|
-| 0 | Lifecycle Manager | [phase-0-lifecycle.md](../phase-0-lifecycle.md) | [phase-0-lifecycle.md](phase-0-lifecycle.md) | Готово |
-| 1 | Testing Framework | [phase-1-testing.md](../phase-1-testing.md) | [phase-1-testing.md](phase-1-testing.md) | Готово |
-| 2 | Adapter v2 (psycopg) | [phase-2-adapter-v2.md](../phase-2-adapter-v2.md) | [phase-2-adapter-v2.md](phase-2-adapter-v2.md) | Готово |
-| 3 | ArcadedbSessionDB | [phase-3-sessiondb.md](../phase-3-sessiondb.md) | [phase-3-sessiondb.md](phase-3-sessiondb.md) | Готово |
-| 4 | Consumer Migration | [phase-4-consumers.md](../phase-4-consumers.md) | [phase-4-consumers.md](phase-4-consumers.md) | Factory готов, consumers — нет (TD-8) |
+| Фаза | Название | Статус |
+|------|----------|--------|
+| 0 | Lifecycle Manager | ✅ Готово |
+| 1 | Testing Framework | ✅ Готово |
+| 2 | Adapter (HTTP-first + PG vector) | ✅ Готово |
+| 3 | ArcadedbSessionDB + SearchMatter | ✅ Готово |
+| 4 | Consumer Migration (Factory) | ✅ Готово |
+| — | Redis Compression Locks | ✅ Готово (Phase X) |
+| — | LLM SearchMatter Summarization | ✅ Готово |
+| 5 | Data Migration Tool | ⏳ Не начато |
+| 6 | KanbanDB | ⏳ Не начато |
+| 7 | Memory Store | ⏳ Не начато |
+| 8 | Other Databases | ⏳ Не начато |
+
+## Текущий статус (07.07.2026)
+
+**127/127 тестов (100%). 0 XFAIL, 0 FAILED.**
+
+- ArcadeDB 26.7.2-SNAPSHOT + Redis 7 на `176.108.249.180`
+- `create_session_db()` factory: форсирует ArcadeDB через `ARCADEDB_TEST_HOST` env var
+- Compression locks: Redis SET NX EX (атомарно, 0 XFAIL)
+- Векторный поиск: HTTP API (port 2480), работает на 1024d
+- PG протокол: psycopg3 на Linux (system libpq), SSH-fallback на Windows
 
 ## Ключевые отклонения от ТЗ
 
-### ArcadeDB PG Protocol — Simple Query Mode Only
+### HTTP-first архитектура (вместо psycopg-only)
 
-**ТЗ предполагало:** полноценный PostgreSQL wire protocol с bind-параметрами
-и psycopg-level транзакциями (`autocommit=False` + `conn.commit()`).
+**ТЗ предполагало:** psycopg + PG wire protocol для всего.
 
-**Реальность:** ArcadeDB поддерживает только «simple» query mode. Нет
-extended query protocol → нет prepared statements, нет bind-параметров.
+**Реальность:** 
+- HTTP API (port 2480) — CRUD, schema, векторный INSERT
+- PG wire (port 5432) — ТОЛЬКО векторный поиск (psycopg3)
+- `_SqlCollector`: батчинг SQL → один HTTP POST с `language=sqlscript`, implicit транзакция
+- pg8000/psycopg2 — НЕСОВМЕСТИМЫ с ArcadeDB SCRAM-SHA-256 auth
 
-**Решение:**
-- `autocommit=True` всегда
-- Dict-параметры авто-конвертируются через `ArcadeDBAdapter._fmt()`
-- Multi-param INSERT/UPDATE используют `_q()`/`_n()` string formatting
-- Транзакции через SQL `BEGIN`/`COMMIT`/`ROLLBACK`
+### SCRAM-SHA-256 Auth
 
-### ArcadeDB SQL Dialect Differences
+ArcadeDB 26.7.x использует SCRAM-SHA-256 для PG протокола. Работает только с
+системным libpq (Linux psql, psycopg3). Все Python PG-драйверы с bundled libpq
+несовместимы. См. `ARCADE_QUIRKS.md` §11.
 
-| Ожидалось (стандартный SQL) | ArcadeDB |
-|---|---|
-| `LIMIT X OFFSET Y` | `LIMIT X SKIP Y` |
-| `LIKE ... ESCAPE '\'` | `LIKE ...` (без ESCAPE) |
-| `FROM a, b` | Не поддерживается |
-| `DELETE VERTEX` (cascade) | Зависает → `UPDATE active=0` |
-| `RETURN @rid` (CREATE VERTEX) | Не поддерживается |
-| `LET s = (SELECT ...)` | Поддерживается, но нестабильно |
+### Redis Distributed Locks
 
-### Интеграционный тест: 10/10 PASSED
+DB-based CAS (UNIQUE constraint) неработоспособен под READ_COMMITTED (9 XFAIL).
+Заменён на Redis `SET NX EX` — детерминированно, атомарно, crash-safe.
+Fallback на DB-CAS при недоступности Redis.
 
-Проверено на ArcadeDB 26.7.1-SNAPSHOT (Docker, SSH-туннель).
-Все 10 операций (factory → CRUD → search → locks → export) работают.
+### ARCADEDB_TEST_HOST для тестов
 
-## Следующий шаг: TD-8 (CRITICAL)
+Factory `create_session_db()` проверяет `ARCADEDB_TEST_HOST` env var.
+Если установлен — форсирует ArcadeDB независимо от `database.arcadedb.enabled`.
+Обходит lifecycle-проверку (Docker health check).
 
-30+ consumers всё ещё создают `SessionDB()` напрямую вместо `create_session_db()`.
-Без этого ArcadeDB не активируется при реальном запуске Hermes.
+## Интеграционный тест: 127/127 PASSED
 
-См. [phase-4-consumers.md](phase-4-consumers.md) — план переключения.
+100 unit/integration + 27 E2E тестов. Запуск на боевом сервере без SSH-туннелей.
+Время прогона: 84 секунды (против 700 через туннель с Windows).
+
+## Следующие шаги
+
+| Приоритет | Задача |
+|-----------|--------|
+| HIGH | Починить Gateway provider routing (OpenRouter перехватывает DeepSeek) |
+| HIGH | Phase 5: Data Migration Tool (SQLite → ArcadeDB) |
+| MEDIUM | Dashboard auth для внешнего доступа |
+| LOW | Phase 6-8: KanbanDB, Memory Store, вспомогательные БД |

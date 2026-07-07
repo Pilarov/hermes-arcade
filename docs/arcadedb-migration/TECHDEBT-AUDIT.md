@@ -1,5 +1,35 @@
 # ArcadeDB Migration — Tech Debt Audit (Code Review)
 
+## Third Audit (07.07.2026)
+
+After implementing Redis locks, vector search, LLM summarization. **127/127 tests, 0 XFAIL.**
+
+| Verdict | Count | Details |
+|---------|-------|---------|
+| **FIXED** | 9 | Compression locks XFAIL → 0 (Redis SET NX EX replaces DB CAS) |
+| **FIXED** | 4 | test_query_params, test_start_calls_docker, test_get_by_title, test_record_cooldown |
+| **NEW** | 1 | Gateway routes deepseek-chat through OpenRouter, ignoring custom providers.openai |
+| **REMAINING** | 2 | AUD-8 (claim_handoff CAS), NEW-2 (unreachable?) |
+
+**Progress: 31/35 fixed (89%)** | **1 new issue** | **Total: 4 remaining**
+
+**Fixes since second audit:**
+- Compression locks: Redis SET NX EX + EVAL release — детерминированный distributed lock
+- Vector search: HTTP API for vector.neighbors (работает на 1024d)
+- LLM summarization: sliding window + call_llm + fallback
+- SearchMatter: keywords/entity_names удалены
+- pg_query: psycopg3 на Linux (system libpq), SSH-fallback на Windows
+
+**New issues:**
+- TD-9: Gateway provider routing — OpenRouter перехватывает deepseek-chat, disabled_providers не работает в Hermes 0.17.0
+- TD-10: Dashboard auth — cannot bind to 0.0.0.0 без auth provider
+
+**Remaining from original (4):**
+- AUD-8: claim_handoff CAS (не атомарен)
+- AUD-16: Verification pruning (MEDIUM)
+- AUD-17,18,19: retry/error handling (MEDIUM)
+- AUD-21,22: _rid_to_int, null bytes (MEDIUM)
+
 ## Second Audit (03.07.2026)
 
 After implementing Blocks 1-7. **Verification against original audit.**

@@ -1,92 +1,60 @@
-# Phase 2: ArcadeDBAdapter v2 — As-Built
+# Phase 2: ArcadeDBAdapter — As-Built (HTTP-first)
 
 ## Файлы
 
-| Файл | Было | Стало | Назначение |
-|------|------|-------|------------|
-| `hermes_cli/arcadedb.py` | 102 строки (HTTP/JSON) | 277 строк (psycopg) | Полная перезапись |
-| `pyproject.toml` | — | +2 deps | `psycopg[binary]>=3.1,<4` + `psycopg-pool>=3.3,<4` |
+| Файл | Строки | Назначение |
+|------|--------|------------|
+| `hermes_cli/arcadedb.py` | 484 | HTTP-транспорт + `_SqlCollector` + `pg_query()` (Живая версия, 07.07) |
+| `hermes_cli/redis_lock.py` | 110 | `RedisLockManager` для compression locks (добавлен 07.07) |
 
-## Реализованные методы
+## Архитектура (финальная)
 
 ```
-ArcadeDBConfig
-├── host: str = "localhost"
-├── port: int = 5432              # PostgreSQL wire protocol (не HTTP)
-├── database: str = "hermes"
-├── user: str = "root"
-├── password: str = ""
-├── timeout: float = 30.0
-├── pool_min: int = 2
-├── pool_max: int = 10
-└── pool_timeout: float = 10.0
-
-ArcadeDBAdapter
-├── connect()              → ConnectionPool + health check
-├── close()                → pool.close()
-├── connected (property)   → bool
-├── get_conn() / put_conn() → pool connection management
-│
-├── transact(fn)           → BEGIN; fn(cur); COMMIT/ROLLBACK
-│
-├── execute(sql, params, language)  → SQL command
-├── query(sql, params)              → SELECT shortcut
-├── execute_script(script)          → multi-statement
-│
-├── _fmt(sql, params: dict) → %(name)s → SQL literals (static)
-├── _vec(val: list)         → float[] → JSON SQL literal
-└── _parse_vec(s: str)     → JSON → list[float]
+┌─────────────────────────────────────────┐
+│           ArcadeDBAdapter               │
+│                                         │
+│  CRUD (83 метода)   → HTTP API :2480   │
+│    _SqlCollector     → один POST        │
+│    implicit транзакция                  │
+│                                         │
+│  Векторный поиск    → PG wire :5432    │
+│    pg_query()        → psycopg3 (Linux) │
+│                       → SSH+subprocess  │
+│                                         │
+│  Compression locks  → Redis :6379       │
+│    SET NX EX                            │
+│    (fallback: DB UNIQUE CAS)            │
+└─────────────────────────────────────────┘
 ```
 
 ## Ключевые решения
 
-### 1. autocommit=True (ArcadeDB limitation)
+### HTTP-first (вместо psycopg-only)
+- **Причина**: ArcadeDB Discussion #399 — psycopg2/psycopg3/pg8000 несовместимы с PG wire протоколом
+- **Решение**: HTTP API (port 2480) для CRUD и schema-операций
+- **Исключение**: `vector.neighbors` через HTTP работает (подтверждено: 1024d векторы)
+- **PG протокол**: только для векторного поиска через psycopg3 на Linux
 
-Официальная документация ArcadeDB PostgreSQL plugin:
-> Enabling auto commit to false is not 100% supported.
+### _SqlCollector (паттерн)
+- Накопление SQL-стейтментов → один HTTP POST с `language=sqlscript`
+- Implicit BEGIN/COMMIT — все операции в одной транзакции
+- Используется в 83 методах `ArcadedbSessionDB`
 
-Все запросы выполняются в режиме `autocommit=True`. Транзакции — через
-SQL-команды `BEGIN`/`COMMIT`/`ROLLBACK` в методе `transact()`.
+### pg_query() — двойной режим
+- **Linux**: прямой psycopg3 (system libpq) → мгновенно
+- **Windows**: SSH → subprocess Python на Linux-хосте
+- Авто-детект через `sys.platform`
 
-### 2. _fmt() — auto-convert dict params
+### _http_send — критический return
+- Успешный HTTP-ответ: `return resp.json().get("result", [])`
+- При ошибках 400/409: проверка на "already exists/already defined" маркеры → return []
+- Прочие ошибки: raise ArcadeDBError
 
-ArcadeDB поддерживает только «simple» query mode (нет extended protocol →
-нет prepared statements → нет bind-параметров для сложных запросов).
-Метод `_fmt()` конвертирует `%(name)s` плейсхолдеры в SQL-литералы:
+## Отклонения от первоначального ТЗ
 
-```python
-# Было (не работает в ArcadeDB):
-adapter.query("SELECT FROM T WHERE x = %(val)s", {"val": "hello"})
-
-# Стало (авто-конвертация):
-adapter.query("SELECT FROM T WHERE x = 'hello'")
-```
-
-Tuple-параметры (`%s`) для 1-3 простых значений проходят через psycopg bind.
-
-### 3. sslmode=disable
-
-ArcadeDB PG plugin не поддерживает SSL. `sslmode=disable` обязателен.
-
-### 4. Connection pool management
-
-ConnectionPool с `open=True` (явное открытие при создании). При ошибке
-`PoolTimeout` или `OperationalError` пул закрывается и пробрасывается `ArcadeDBError`.
-
-## Отклонения от ТЗ
-
-| ТЗ | Реальность | Причина |
-|----|-----------|---------|
-| `autocommit=False` + `conn.commit()` | `autocommit=True` + SQL `BEGIN`/`COMMIT` | ArcadeDB limitation |
-| Bind-параметры через `%(name)s` | `_fmt()` string formatting | Simple query mode only |
-| `conn.autocommit = True/False` toggling | Не используется | ArcadeDB не поддерживает |
-| Prepared statements (`prepare_threshold=5`) | Убран | Extended protocol недоступен |
-
-## Тесты
-
-`tests/test_arcadedb_adapter.py` — **1 PASSED, 10 SKIPPED** (нужен ArcadeDB контейнер)
-
-```
-PASSED: test_connect_failure — ArcadeDBError при недоступном хосте
-SKIPPED: transactions, queries, vectors — ждут Docker container
-```
+| ТЗ | Реальность |
+|----|-----------|
+| psycopg + PG connection pool | HTTP API, без пула |
+| `autocommit=False` | Autocommit=True обязателен |
+| psycopg2-binary как зависимость | УДАЛЁН — несовместим |
+| `dict_row` row_factory | УДАЛЁН — ручное построение dict |
