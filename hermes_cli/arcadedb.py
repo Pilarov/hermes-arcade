@@ -194,18 +194,6 @@ class ArcadeDBAdapter:
                 "already exists", "already defined", "already assigned",
             )):
                 return []
-            raise ArcadeDBError(
-                f"HTTP {resp.status_code}: {detail or resp.text[:200]}"
-            )
-        data = resp.json()
-        if data.get("result"):
-            result = data["result"]
-            if isinstance(result, list):
-                return [dict(r) if isinstance(r, dict) else {"value": r}
-                        for r in result]
-            return [{"result": str(result)}]
-        return []
-
     def _http_send_script(self, script: str) -> List[Dict[str, Any]]:
         """Execute sqlscript batch via HTTP (implicit BEGIN/COMMIT)."""
         client = self._http_client()
@@ -391,23 +379,22 @@ class ArcadeDBAdapter:
     # ------------------------------------------------------------------
     # PG protocol — vector search via psql on the ArcadeDB host
     # ------------------------------------------------------------------
-    # PG protocol — vector search via psycopg3 on Linux host
+    # PG protocol — vector search via psycopg3
     # ------------------------------------------------------------------
     # psycopg3 works with ArcadeDB on Linux (system libpq) but not on
-    # Windows (bundled libpq). We SSH to the ArcadeDB host and run
-    # psycopg3 there for vector.neighbors / vector.fuse queries.
+    # Windows (bundled libpq). On Linux we use psycopg3 directly.
+    # On Windows we SSH to the ArcadeDB host and run Python there.
 
     PG_HOST = "176.108.249.180"
     PG_SSH_USER = "pilarovds"
 
     def pg_query(self, sql: str, params=None) -> List[Dict[str, Any]]:
-        """Execute PG query via psycopg3 on the ArcadeDB Linux host.
+        """Execute PG query via psycopg3.
 
-        Vector search (vector.neighbors, vector.fuse) requires PG wire
-        protocol. psycopg3 works on Linux (system libpq) but NOT on
-        Windows. We SSH to the host and run Python there.
+        On Linux: direct psycopg3 connection (system libpq works).
+        On Windows: SSH to Linux host and run psycopg3 there.
         """
-        import subprocess, json as _json
+        import sys, subprocess, json as _json
 
         if params:
             pg_sql = sql
@@ -425,6 +412,33 @@ class ArcadeDBAdapter:
         else:
             pg_sql = sql
 
+        if sys.platform == "linux":
+            return self._pg_query_local(pg_sql)
+        return self._pg_query_remote(pg_sql)
+
+    def _pg_query_local(self, pg_sql: str) -> List[Dict[str, Any]]:
+        """Direct psycopg3 connection on Linux."""
+        try:
+            import psycopg
+            conn = psycopg.connect(
+                host="127.0.0.1", port=5432,
+                user=self._cfg.user, password=self._cfg.password,
+                dbname=self._cfg.database, autocommit=True,
+            )
+            try:
+                r = conn.execute(pg_sql)
+                if r.description:
+                    desc = [d[0] for d in r.description]
+                    return [dict(zip(desc, row)) for row in r.fetchall()]
+                return [list(row) for row in r.fetchall()]
+            finally:
+                conn.close()
+        except Exception:
+            logger.debug("pg_query local failed", exc_info=True)
+            return []
+    def _pg_query_remote(self, pg_sql: str) -> List[Dict[str, Any]]:
+        """SSH to Linux host and run psycopg3 there."""
+        import subprocess, json as _json
         script = (
             "import psycopg, json, sys\n"
             f"c = psycopg.connect(host='127.0.0.1',port=5432,"
@@ -449,17 +463,10 @@ class ArcadeDBAdapter:
                 input=script, capture_output=True, text=True, timeout=30,
             )
             rows = _json.loads(result.stdout.strip())
-            if rows and not isinstance(rows[0], dict):
-                return rows
-            return rows
+            return rows if isinstance(rows, list) else []
         except Exception:
             logger.debug("pg_query SSH failed", exc_info=True)
             return []
-
-    # ------------------------------------------------------------------
-    # Retry helper
-    # ------------------------------------------------------------------
-
     def _retry(self, fn, *args, **kwargs):
         """Execute fn with retry on transient errors."""
         last_err = None
