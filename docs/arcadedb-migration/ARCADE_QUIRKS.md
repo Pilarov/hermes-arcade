@@ -248,6 +248,49 @@ class _SqlCollector:
 
 ---
 
+---
+
+## 11. PG Wire Protocol — SCRAM-SHA-256 Authentication
+
+ArcadeDB 26.7.x PG plugin использует `AuthenticationSASL` (код 10, SCRAM-SHA-256).
+Пароли хранятся как `PBKDF2WithHmacSHA256` — НЕ в SCRAM-формате.
+
+| Клиент | Результат | Причина |
+|--------|-----------|---------|
+| **psql** (libpq) | ✅ Работает | Системный libpq (Linux) корректно обрабатывает SCRAM |
+| **psycopg3** (Linux, system libpq) | ✅ Работает | Тот же libpq, что у psql |
+| **psycopg3** (Windows, bundled libpq) | ❌ `password authentication failed` | Bundled libpq 14.x/18.x несовместим |
+| **psycopg2** (любая платформа) | ❌ `PGRES_TUPLES_OK error` | Баг с 2015: psycopg2 несовместим с ArcadeDB PG |
+| **pg8000** (любая версия) | ❌ `password authentication failed` | Собственная SCRAM-реализация несовместима |
+
+**Решение**: на Linux — psycopg3 с системным libpq. На Windows — SSH+subprocess на Linux-хост.
+
+**Источник**: ArcadeDB Discussion #399 — мейнтейнер подтвердил несовместимость psycopg2 с 2022 года.
+
+## 12. Vector Search — PG vs HTTP
+
+| Протокол | `vector.neighbors` | Причина |
+|----------|-------------------|---------|
+| **HTTP API** | ✅ Работает (4d и 1024d) | JSON-парсинг float[] корректный |
+| **PG wire** | ❌ NPE `params[0] is null` | Jackson не может распарсить inline float[] через PG |
+
+**Решение**: векторный поиск через HTTP API (порт 2480). PG используется только для CRUD через psycopg3.
+
+**Важно**: ArcadeDB 26.7.2-SNAPSHOT: `vector.neighbors` через HTTP работает на 1024d векторах (подтверждено: 5 результатов из 9 SearchMatter вершин).
+
+## 13. Hermes Provider Routing
+
+Hermes Gateway маршрутизирует модели через **OpenRouter** (auto-detect), игнорируя кастомные `providers.*` настройки.
+
+| Попытка | Результат |
+|---------|-----------|
+| `provider: openai` в config | Игнорируется — OpenRouter имеет приоритет |
+| `disabled_providers` | Ключ не существует в Hermes 0.17.0 |
+| `HERMES_PROVIDER=openai` env var | Не работает |
+| `model.provider: openai` | Неправильный формат для этой версии |
+
+**Решение**: использовать отдельный API-бридж (fastapi + httpx → DeepSeek напрямую) ИЛИ получить OpenRouter API-ключ.
+
 ## 10. Полезные ссылки
 
 - [Docker docs](https://docs.arcadedb.com/arcadedb/how-to/operations/docker.html)

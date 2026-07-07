@@ -2,9 +2,81 @@
 
 ## Servers
 
-| Name | IP | OS | Role | Access |
-|------|----|----|------|--------|
-| pilarovds | 176.108.249.180 | Linux | ArcadeDB host | `ssh pilarovds@176.108.249.180` |
+| Name | IP | OS | Specs | Role | Access |
+|------|----|----|-------|------|--------|
+| pilarovds | 176.108.249.180 | Ubuntu 22.04 | 8GB RAM, 4 cores | ArcadeDB + Redis + Hermes | `ssh pilarovds@176.108.249.180` |
+
+## Services / Containers
+
+### hermes-db-arcadedb-1 (ArcadeDB)
+- **Image**: `arcadedata/arcadedb:latest` (26.7.2-SNAPSHOT)
+- **Ports**: `0.0.0.0:2480->2480` (HTTP API), `0.0.0.0:5432->5432` (PG wire)
+- **JVM**: `-server -Xms2G -Xmx2G`
+- **Database**: `hermes` (created via `defaultDatabases=hermes[root:hermes123:admin]`)
+- **Password**: `-Darcadedb.server.rootPassword=hermes123` в JAVA_OPTS
+- **Plugins**: `Postgres:com.arcadedb.postgres.PostgresProtocolPlugin`
+- **Health**: `curl http://176.108.249.180:2480/api/v1/command/hermes` + Basic Auth
+
+### hermes-redis (Redis)
+- **Image**: `redis:7-alpine`
+- **Port**: `0.0.0.0:6379` (`--network host`, `--protected-mode no`)
+- **Restart**: `docker restart hermes-redis`
+- **Note**: Порт 6379 закрыт облачным провайдером извне, работает локально
+
+### Hermes Processes
+
+| Process | Port | Bind | Status | Start command |
+|---------|------|------|--------|---------------|
+| Gateway (API Server) | 9119 | 0.0.0.0 | ✅ | `cd ~/hermes-arcade && .venv/bin/python -m hermes_cli.main gateway run` |
+| Dashboard (Web UI) | 9118 | 127.0.0.1 | ⚠️ (auth required for 0.0.0.0) | `cd ~/hermes-arcade && .venv/bin/python -m hermes_cli.main dashboard --host 127.0.0.1 --port 9118` |
+| Bridge (simple API) | 9119 | 0.0.0.0 |备用 | `.venv/bin/python /tmp/hermes_bridge.py` |
+
+### Hermes Config
+
+- **Config**: `~/.hermes/config.yaml`
+- **Env**: `~/.hermes/.env` (OPENAI_API_KEY, DEEPSEEK_API_KEY, API_SERVER_KEY, OPENROUTER_API_KEY)
+- **Key API key**: `hermes-arcade-key-2026` (для Gateway API)
+- **Venom**: `~/hermes-arcade/.venv/` (Python 3.11)
+
+## Connectivity (last check: 07.07.2026)
+
+| Port | Protocol | Service | Local (127.0.0.1) | External (176.108.249.180) | Security Group |
+|------|----------|---------|---------------------|----------------------------|----------------|
+| 22 | SSH | Admin | ✅ | ✅ | OPEN |
+| 2480 | HTTP | ArcadeDB REST API | ✅ | ✅ | OPEN |
+| 5432 | TCP | ArcadeDB PG Wire | ✅ | ✅ | OPEN |
+| 6379 | TCP | Redis | ✅ | ❌ (provider block) | OPEN in SG, blocked by provider |
+| 9118 | HTTP | Hermes Dashboard | ✅ 127.0.0.1 | ❌ (127.0.0.1 bind) | NOT OPEN |
+| 9119 | HTTP | Hermes Gateway/API | ✅ | ✅ (when running) | NOT OPEN |
+
+## SSH Commands Reference
+
+```bash
+# ArcadeDB
+ssh pilarovds@176.108.249.180 "docker logs --tail 20 hermes-db-arcadedb-1"
+ssh pilarovds@176.108.249.180 "docker restart hermes-db-arcadedb-1"
+
+# Redis
+ssh pilarovds@176.108.249.180 "docker restart hermes-redis"
+
+# Hermes Gateway
+ssh pilarovds@176.108.249.180 "fuser -k 9119/tcp; cd ~/hermes-arcade && nohup .venv/bin/python -m hermes_cli.main gateway run > /tmp/hermes-gw.log 2>&1 &"
+
+# Tests
+ssh pilarovds@176.108.249.180 "cd ~/hermes-arcade && ARCADEDB_TEST_HOST=127.0.0.1 ARCADEDB_TEST_PASSWORD=hermes123 PYTHONPATH=. ~/.local/bin/pytest tests/test_arcadedb_*.py tests/e2e/ -v"
+
+# Deploy
+cd ~/hermes-arcade && git push && ssh pilarovds@176.108.249.180 "cd ~/hermes-arcade && git pull"
+```
+
+## Known Issues
+
+| Date | Issue | Status |
+|------|-------|--------|
+| 07.07 | Hermes Gateway routes `deepseek-chat` through OpenRouter, ignoring custom `providers.openai` | OPEN — use bridge.py or get OpenRouter key |
+| 07.07 | Dashboard cannot bind to 0.0.0.0 without auth provider | OPEN — use SSH tunnel |
+| 07.07 | Redis port 6379 blocked by cloud provider externally | OPEN — works locally |
+| 07.07 | PG vector.neighbors NPE via PG protocol, works via HTTP | Documented in ARCADE_QUIRKS.md |
 
 ## Services / Containers
 

@@ -1,9 +1,46 @@
 # Hermes ArcadeDB — Ход работ
 
-## Текущий статус (06.07.2026)
+## Текущий статус (07.07.2026)
 
-**93-98/101 тестов проходят (92-97%).** ArcadeDB 26.7.1, HTTP-first архитектура.
-3-5 xfailed (ArcadeDB #1000 read-committed), 3-4 xpassed (иногда проходят).
+**127/127 тестов (100%).** ArcadeDB 26.7.2-SNAPSHOT, HTTP-first + PG vector search.
+**0 XFAIL** — Redis-блокировки решили read-committed проблему.
+Боевой стенд: `176.108.249.180` (8GB, 4 ядра).
+
+### Сессии 07.07.2026
+
+#### 07.07 — Redis compression locks (9 XFAIL → 0)
+- **`RedisLockManager`** (`hermes_cli/redis_lock.py`): SET NX EX acquire, EVAL release, XX refresh.
+- UNIQUE constraint CAS заменён на Redis — детерминированный distributed lock.
+- Redis Docker на `176.108.249.180:6379` (`--protected-mode no`).
+- Fallback: если Redis недоступен → DB-based CAS.
+- **Результат**: 16/16 compression lock тестов, 0 XFAIL.
+
+#### 07.07 — psycopg3 на Linux: векторный поиск через PG
+- `pg_query()` переписан: на Linux — прямой psycopg3 (system libpq), на Windows — SSH+subprocess.
+- **Открытие**: psycopg3 НЕ работает на Windows (bundled libpq несовместим с ArcadeDB SCRAM).
+- **Открытие**: `vector.neighbors` через PG wire падает с NPE на любых размерах векторов.
+- **Открытие**: `vector.neighbors` через HTTP API РАБОТАЕТ на 1024d.
+- Решение: `pg_query()` на Linux → psycopg3 напрямую, без SSH-туннеля.
+- `_http_send` fix: восстановлен `return resp.json().get("result", [])` для успешных ответов.
+
+#### 07.07 — Боевой стенд: 127/127 тестов
+- Деплой на сервер через Git: commit → push → pull → pytest.
+- Запуск тестов на сервере (без SSH-туннелей): 54 секунды против 700 через туннель.
+- fastembed работает на Linux (multilingual-e5-large).
+- E2E тесты: `create_session_db()` фабрика форсирует ArcadeDB через `ARCADEDB_TEST_HOST`.
+- `hermes_state.py`: `ARCADEDB_TEST_HOST` env var обходит lifecycle check для CI/тестов.
+- **Итого**: 100 unit/integration + 27 E2E = 127/127 PASSED, 0 FAILED, 0 XFAIL.
+
+#### 07.07 — Инфраструктура и доступ
+- Redis Docker (`hermes-redis`, `--network host`).
+- Security group: порты 22, 2480, 5432 открыты. 6379 — закрыт облачным провайдером.
+- Hermes Gateway на `0.0.0.0:9119` (API server platform).
+- Hermes Dashboard на `127.0.0.1:9118` (web UI).
+- **Проблема**: Gateway маршрутизирует `deepseek-chat` через OpenRouter, игнорируя кастомный `providers.openai`. `disabled_providers` не поддерживается в этой версии Hermes.
+
+#### 07.07 — Документация
+- `ARCADE_QUIRKS.md`: SCRAM vs libpq, PG vs HTTP vectors, provider routing.
+- `INFRASTRUCTURE.md`: Redis, порты, SSH-команды, Gateway/Dashboard.
 
 ### Сессии 04-06.07.2026
 
