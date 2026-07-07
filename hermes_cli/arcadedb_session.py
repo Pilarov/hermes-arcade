@@ -46,6 +46,29 @@ from hermes_cli.arcadedb_helpers import (
 logger = logging.getLogger(__name__)
 
 
+# ── SearchMatter: LLM summarization prompt ──────────────────────────────
+# Follows the same hardcoded-constant pattern as CURATOR_REVIEW_PROMPT
+# (agent/curator.py) and background_review prompts (agent/background_review.py).
+_SEARCH_MATTER_SYSTEM_PROMPT = (
+    "Summarize this conversation between a user and an AI agent. "
+    "Focus on: user's goals, decisions made, technical details, "
+    "preferences revealed, and key outcomes. "
+    "Be concise and factual. "
+    "Write in the same language the user was using."
+)
+
+_SEARCH_MATTER_COMBINE_PROMPT = (
+    "Combine these session summaries into one compact summary "
+    "preserving ALL key facts, decisions, and user preferences."
+)
+
+# Defaults (overridable via config.yaml → search_matter:)
+_SEARCH_MATTER_DEFAULT_MAX_MESSAGES = 50
+_SEARCH_MATTER_DEFAULT_OVERLAP = 5
+_SEARCH_MATTER_DEFAULT_MAX_RECURSION = 3
+_SEARCH_MATTER_DEFAULT_MAX_CHARS = 2000
+
+
 # Block 3: Entity extraction + graph edges (var B: edges after transact)
 def _extract_entities_from_text(text: str) -> list[str]:
     """Extract named entities from text. Pure function — no DB access."""
@@ -124,6 +147,32 @@ class ArcadedbSessionDB:
         self._embedder = embedder
         self._graph_store = graph_store
         self._read_only = read_only
+        self._lock_mgr = self._init_lock_manager()
+
+    def _init_lock_manager(self):
+        """Initialize RedisLockManager (fallback: DB-based CAS)."""
+        try:
+            from hermes_cli.config import load_config
+            config = load_config()
+            redis_cfg = config.get("redis", {}) if isinstance(config, dict) else {}
+            if redis_cfg.get("enabled", True):
+                import os, redis
+                password = os.environ.get("REDIS_PASSWORD")
+                r = redis.Redis(
+                    host=redis_cfg.get("host", "localhost"),
+                    port=redis_cfg.get("port", 6379),
+                    db=redis_cfg.get("db", 0),
+                    password=password or None,
+                    socket_connect_timeout=3,
+                    decode_responses=True,
+                )
+                r.ping()
+                from hermes_cli.redis_lock import RedisLockManager
+                logger.debug("Redis lock manager initialized")
+                return RedisLockManager(r)
+        except Exception:
+            logger.debug("Redis unavailable, falling back to DB-based CAS", exc_info=True)
+        return None
 
     def close(self) -> None:
         if self._adapter:
@@ -173,7 +222,14 @@ class ArcadedbSessionDB:
             self._create_search_matter(session_id)
 
     def _create_search_matter(self, session_id: str) -> None:
-        """Populate SearchMatter vertex for hybrid cross-session search."""
+        """Populate SearchMatter vertex for hybrid cross-session search.
+
+        Generates an LLM summary of the session dialog (configurable via
+        config.yaml → search_matter:). For sessions exceeding
+        max_messages, uses a sliding-window approach: chunk → summarize
+        each → recursively combine summaries. Falls back to simple
+        message join if LLM is unavailable.
+        """
         if not self._embedder:
             return
         try:
@@ -184,36 +240,159 @@ class ArcadedbSessionDB:
             if not session_rid:
                 return
 
-            # Build summary from user messages
+            # Read config
+            cfg = self._get_search_matter_config()
+
             msgs = self.get_messages(session_id, include_inactive=False)
-            user_msgs = [
-                str(_decode_content(m.get("content", "")))
-                for m in msgs if m.get("role") == "user"
-            ]
-            if not user_msgs:
+            if not msgs:
                 return
-            summary = " ".join(user_msgs[:5])[:500]
-            keywords = list({w.lower() for w in summary.split() if len(w) > 3})[:20]
+
+            source = session.get("source", "")
+            model_name = session.get("model", "")
+
+            if cfg.get("llm_summary", True):
+                summary = self._summarize_session_dialog(msgs, cfg)
+                if not summary:
+                    summary = self._fallback_summary(msgs)
+            else:
+                summary = self._fallback_summary(msgs)
 
             from hermes_cli.arcadedb import ArcadeDBAdapter
             emb = self._embedder.embed([summary])[0]
             qv = ArcadeDBAdapter._vec(emb.dense)
 
-            source = session.get("source", "")
-            model = session.get("model", "")
-
             self._adapter.execute(
                 f"INSERT INTO SearchMatter SET "
                 f"session_rid = {_q(session_rid)}, "
                 f"summary = {_q(summary)}, "
-                f"keywords = {_q(json.dumps(keywords))}, "
                 f"embedding = {qv}, "
                 f"profile = {_q(source)}, "
-                f"model = {_q(model)}, "
+                f"model = {_q(model_name)}, "
                 f"created_at = {_n(_now())}"
             )
         except Exception:
-            pass  # SearchMatter is best-effort, don't block end_session
+            pass  # SearchMatter is best-effort
+
+    def _get_search_matter_config(self) -> dict:
+        """Read search_matter config section with defaults."""
+        try:
+            from hermes_cli.config import load_config
+            config = load_config()
+            return config.get("search_matter", {}) if isinstance(config, dict) else {}
+        except ImportError:
+            return {}
+
+    def _summarize_session_dialog(self, msgs: list, cfg: dict) -> str:
+        """Summarize session messages via LLM with sliding-window fallback.
+
+        Uses message count from config (not character count):
+          max_messages: max messages in one chunk (default 50)
+          overlap: messages overlapping between chunks (default 5)
+          max_recursion: max depth of recursive combination (default 3)
+        """
+        max_messages = cfg.get("sliding_window", {}).get("max_messages",
+            _SEARCH_MATTER_DEFAULT_MAX_MESSAGES)
+        overlap = cfg.get("sliding_window", {}).get("overlap",
+            _SEARCH_MATTER_DEFAULT_OVERLAP)
+        max_recursion = cfg.get("sliding_window", {}).get("max_recursion",
+            _SEARCH_MATTER_DEFAULT_MAX_RECURSION)
+        max_chars = cfg.get("summary_max_chars", _SEARCH_MATTER_DEFAULT_MAX_CHARS)
+
+        # Filter to user + assistant messages with content
+        significant = [
+            m for m in msgs
+            if m.get("role") in ("user", "assistant")
+            and str(_decode_content(m.get("content", ""))).strip()
+        ]
+        if not significant:
+            return self._fallback_summary(msgs)
+
+        # If under the window — summarize directly
+        if len(significant) <= max_messages:
+            return self._llm_summarize(
+                self._messages_to_text(significant), max_chars
+            )
+
+        # Sliding window: chunk → summarize each → recursively combine
+        return self._sliding_window_summarize(
+            significant, max_messages, overlap, max_recursion, max_chars, 0
+        )
+
+    def _sliding_window_summarize(
+        self, msgs: list, max_msgs: int, overlap: int,
+        max_recursion: int, max_chars: int, depth: int,
+    ) -> str:
+        """Recursive sliding-window summarization over message chunks."""
+        step = max(1, max_msgs - overlap)
+        chunks: list[list] = []
+        i = 0
+        while i < len(msgs):
+            chunk = msgs[i:i + max_msgs]
+            if chunk:
+                chunks.append(chunk)
+            i += step
+
+        summaries: list[str] = []
+        for chunk in chunks:
+            s = self._llm_summarize(self._messages_to_text(chunk), max_chars)
+            if s:
+                summaries.append(s)
+
+        if not summaries:
+            return self._fallback_summary(msgs)
+        if len(summaries) == 1 or depth >= max_recursion:
+            return summaries[0] if len(summaries) == 1 else "\n---\n".join(summaries)
+
+        # Recursive combine — create pseudo-messages from summaries
+        combined_msgs = [
+            {"role": "assistant", "content": s} for s in summaries
+        ]
+        return self._sliding_window_summarize(
+            combined_msgs, max_msgs, overlap, max_recursion, max_chars, depth + 1
+        )
+
+    def _messages_to_text(self, msgs: list) -> str:
+        """Serialize messages to text for the LLM."""
+        lines: list[str] = []
+        for m in msgs:
+            role = m.get("role", "?")
+            content = str(_decode_content(m.get("content", "")))
+            if not content.strip():
+                continue
+            lines.append(f"[{role.upper()}]: {content}")
+        return "\n".join(lines)
+
+    def _llm_summarize(self, text: str, max_chars: int) -> str:
+        """Call auxiliary LLM to summarize dialog text."""
+        try:
+            from agent.auxiliary_client import call_llm
+            response = call_llm(
+                task="search_matter",
+                messages=[{
+                    "role": "system",
+                    "content": _SEARCH_MATTER_SYSTEM_PROMPT,
+                }, {
+                    "role": "user",
+                    "content": (
+                        f"Summarize this conversation in at most {max_chars} "
+                        f"characters:\n\n{text}"
+                    ),
+                }],
+                max_tokens=800,
+                timeout=50,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _fallback_summary(msgs: list) -> str:
+        """Simple join of user messages when LLM is unavailable."""
+        user_texts = [
+            str(_decode_content(m.get("content", "")))
+            for m in msgs if m.get("role") == "user"
+        ]
+        return " ".join(user_texts[:10])[:2000]
 
     def reopen_session(self, session_id: str) -> None:
         self._adapter.execute(
@@ -1193,7 +1372,7 @@ class ArcadedbSessionDB:
 
         sql = (
             "SELECT expand(vector.fuse(\n"
-            f"    `vector.neighbors`('SearchMatter[embedding]', {qv}, {top_k}),\n"
+            f"    vector.neighbors('SearchMatter[embedding]', {qv}, {top_k}),\n"
             f"{fulltext_branch}"
             "    { fusion: 'RRF', groupBy: 'session_rid', groupSize: 1 }\n"
             f")) LIMIT {top_k}"
@@ -1208,36 +1387,39 @@ class ArcadedbSessionDB:
     def try_acquire_compression_lock(
         self, session_id: str, holder: str, ttl_seconds: float = 300,
     ) -> bool:
+        """Acquire compression lock via Redis (or DB-based CAS as fallback).
+
+        Redis SET NX EX is atomic and deterministic — no read-committed
+        visibility issues. Fallback uses UNIQUE constraint CAS on DB.
+        """
+        if self._lock_mgr is not None:
+            return self._lock_mgr.try_acquire(
+                session_id, holder, ttl_seconds,
+            )
+        # Fallback: DB-based CAS (ArcadeDB #1000 — non-deterministic)
+        return self._db_try_acquire_compression_lock(
+            session_id, holder, ttl_seconds,
+        )
+
+    def _db_try_acquire_compression_lock(
+        self, session_id: str, holder: str, ttl_seconds: float = 300,
+    ) -> bool:
+        """DB-based CAS — fallback when Redis is unavailable."""
         now_ts = _now()
         expires = now_ts + ttl_seconds
 
         def _do(cur):
-            if ttl_seconds >= 0:
-                # Check for non-expired locks (CAS protection)
-                for _ in range(3):
-                    cur.execute(
-                        f"SELECT holder FROM CompressionLock "
-                        f"WHERE session_id = {_q(session_id)} AND expires_at > {_n(now_ts)}"
-                    )
-                    rows = cur.fetchall()
-                    if rows:
-                        return False  # Active lock held
-                    time.sleep(0.05)
-            # Delete ALL existing locks for this session (safe:
-            # either none exist, or we verified they're all expired)
             cur.execute(
-                f"DELETE FROM CompressionLock WHERE session_id = {_q(session_id)}"
+                f"DELETE FROM CompressionLock "
+                f"WHERE session_id = {_q(session_id)} "
+                f"AND expires_at <= {_n(now_ts)}"
             )
             cur.execute(
                 f"INSERT INTO CompressionLock SET "
                 f"session_id = {_q(session_id)}, holder = {_q(holder)}, "
                 f"acquired_at = {_n(now_ts)}, expires_at = {_n(expires)}"
             )
-            cur.execute(
-                f"SELECT holder FROM CompressionLock WHERE session_id = {_q(session_id)}"
-            )
-            rows = cur.fetchall()
-            return bool(rows and rows[0]["holder"] == holder)
+            return True
 
         try:
             return self._adapter.transact(_do)
@@ -1247,6 +1429,8 @@ class ArcadedbSessionDB:
     def refresh_compression_lock(
         self, session_id: str, holder: str, ttl_seconds: float = 300,
     ) -> bool:
+        if self._lock_mgr is not None:
+            return self._lock_mgr.refresh(session_id, holder, ttl_seconds)
         expires = _now() + ttl_seconds
         self._adapter.execute(
             f"UPDATE CompressionLock SET expires_at = {_n(expires)} "
@@ -1255,15 +1439,20 @@ class ArcadedbSessionDB:
         return True
 
     def release_compression_lock(self, session_id: str, holder: str) -> None:
+        if self._lock_mgr is not None:
+            self._lock_mgr.release(session_id, holder)
+            return
         self._adapter.execute(
-            f"DELETE FROM CompressionLock WHERE session_id = {_q(session_id)} AND holder = {_q(holder)}"
+            f"DELETE FROM CompressionLock "
+            f"WHERE session_id = {_q(session_id)} AND holder = {_q(holder)}"
         )
 
     def get_compression_lock_holder(self, session_id: str) -> Optional[str]:
+        if self._lock_mgr is not None:
+            return self._lock_mgr.get_holder(session_id)
         rows = self._adapter.query(
-            "SELECT holder FROM CompressionLock WHERE session_id = %s "
-            "AND expires_at >= %s",
-            (session_id, _now()),
+            f"SELECT holder FROM CompressionLock "
+            f"WHERE session_id = {_q(session_id)}"
         )
         return rows[0]["holder"] if rows else None
 

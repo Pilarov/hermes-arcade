@@ -1,9 +1,60 @@
 # Hermes ArcadeDB — Ход работ
 
-## Текущий статус (03.07.2026)
+## Текущий статус (06.07.2026)
 
-**47/59 тестов проходят (80%).** ArcadeDB 26.7.1, пароль через Java property.
-API сервер для OpenWebUI запущен.
+**93-98/101 тестов проходят (92-97%).** ArcadeDB 26.7.1, HTTP-first архитектура.
+3-5 xfailed (ArcadeDB #1000 read-committed), 3-4 xpassed (иногда проходят).
+
+### Сессии 04-06.07.2026
+
+#### 04.07 — HTTP-first архитектура + _SqlCollector
+- **Полный отказ от PG для записей.** Все CRUD-операции через HTTP API (port 2480).
+- Паттерн `_SqlCollector`: накопление SQL → один POST с `language=sqlscript`, implicit BEGIN/COMMIT.
+- PG (port 5432) только для векторного поиска: `pg_query()` — свежее соединение, только чтение.
+- `autocommit=True` обязателен (ArcadeDB PG simple query mode).
+- 83 метода используют `_SqlCollector`.
+
+#### 04.07 — SearchMatter CQRS + compression locks
+- `SearchMatter` vertex type: session_rid, summary, embedding, profile, model, created_at.
+- `_create_search_matter()` на `end_session()` — только при первом завершении (проверка `ended_at IS NULL`).
+- Best-effort: Exception → pass, не блокирует end_session.
+- Compression lock CAS: `if ttl_seconds >= 0` SELECT-проверка + безусловный DELETE.
+- Retry pattern 3×50ms для read-committed visibility.
+
+#### 04.07 — Memory providers анализ
+- Holographic (HRR алгебра, ArcadeDB прототип), RetainDB (SOTA LongMemEval, write-behind queue).
+- +7 memory providers проанализированы на совместимость с ArcadeDB.
+
+#### 04.07 — Critical ops + handoff + titles + SearchMatter тесты
+- `test_arcadedb_critical_ops.py`: 8 CRITICAL + 6 MEDIUM тестов + `_g()` helper.
+- `test_arcadedb_handoff.py`: 8 тестов (request → claim → complete → fail → list).
+- `test_arcadedb_titles.py`: 10 тестов.
+- `test_arcadedb_searchmatter.py`: 9 тестов (create, hybrid_search, vector, LIKE, filters, CJK, cross-session).
+
+#### 05.07 — ArcadeDB quirks + stabilisation
+- `ARCADE_QUIRKS.md`: 10 разделов известных ограничений.
+- `TEST_POLICY.md`: правила тестирования (unique IDs, read-committed awareness).
+- Production smoke test: 5 диалогов через DeepSeek — 0 Transaction not active, 0 ArcadeDB ошибок.
+- 88 сессий в ArcadeDB.
+
+#### 06.07 — SearchMatter: LLM summarization + keywords cleanup
+- **`_create_search_matter()` переписан**: LLM-саммаризация вместо простого join первых 5 сообщений.
+- Sliding window для длинных диалогов (>8000 chars): chunk → summarize → combine summaries.
+- `_llm_summarize()` → `call_llm(task="search_matter", ...)` через auxiliary config.
+- `_fallback_summary()` — join user messages при недоступности LLM.
+- **Добавлен `auxiliary.search_matter`** в `hermes_cli/config.py`: provider="auto" → main chat model.
+- **Удалены keywords и entity_names** из схемы SearchMatter и всех запросов.
+- **Почищен `graph_store.py`**: `create_search_matter()` без keywords/entity_names.
+- **Почищены тесты**: удалён `_seed_search_matter()`, нет keyword-assertions.
+
+#### 06.07 — OpenCode skills (7 навыков)
+- `disciplined-engineer`: оркестратор сессии, codegraph reindex, RPRA workflow.
+- `history-keeper`: History.md создание/обновление.
+- `tech-debt-tracker`: TECH_DEBT.md ledger.
+- `research-spike`: time-boxed исследование через codegraph + tavily.
+- `test-discipline`: test-first, output verification, 2-strikes escalation.
+- `code-reviewer`: 5-axis review (correctness/security/perf/maintainability/accessibility).
+- `architect`: ADR с codegraph impact analysis.
 
 ### Три итерации исправлений (02-03.07)
 

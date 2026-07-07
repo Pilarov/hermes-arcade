@@ -327,8 +327,6 @@ VERTICES: Dict[str, Dict[str, Any]] = {
         "props": [
             ("session_rid", "LINK"),
             ("summary", "STRING"),
-            ("keywords", "LIST"),
-            ("entity_names", "LIST"),
             ("embedding", f"LIST(EXTERNAL true)"),
             ("created_at", "DOUBLE"),
             ("profile", "STRING"),

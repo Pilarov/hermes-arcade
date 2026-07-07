@@ -153,8 +153,6 @@ class GraphStore:
         self,
         session_rid: str,
         summary: str,
-        keywords: Optional[List[str]] = None,
-        entity_names: Optional[List[str]] = None,
         profile: str = "",
         model: str = "",
     ) -> Dict[str, Any]:
@@ -164,8 +162,6 @@ class GraphStore:
             "INSERT INTO SearchMatter SET "
             "session_rid = :sr, "
             "summary = :s, "
-            "keywords = :kw, "
-            "entity_names = :en, "
             f"embedding = {_vec(emb.dense)}, "
             "created_at = :ts, "
             "profile = :p, "
@@ -173,8 +169,6 @@ class GraphStore:
             params={
                 "sr": session_rid,
                 "s": summary,
-                "kw": json.dumps(keywords or []),
-                "en": json.dumps(entity_names or []),
                 "ts": _now(),
                 "p": profile,
                 "m": model,

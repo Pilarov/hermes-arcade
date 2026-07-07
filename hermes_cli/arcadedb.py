@@ -31,8 +31,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 import httpx
-import psycopg
-from psycopg.rows import dict_row
 
 logger = logging.getLogger(__name__)
 
@@ -391,35 +389,72 @@ class ArcadeDBAdapter:
         return json.loads(s)
 
     # ------------------------------------------------------------------
-    # PG protocol — vector search only (read-only, no pool corruption)
+    # PG protocol — vector search via psql on the ArcadeDB host
     # ------------------------------------------------------------------
+    # PG protocol — vector search via psycopg3 on Linux host
+    # ------------------------------------------------------------------
+    # psycopg3 works with ArcadeDB on Linux (system libpq) but not on
+    # Windows (bundled libpq). We SSH to the ArcadeDB host and run
+    # psycopg3 there for vector.neighbors / vector.fuse queries.
+
+    PG_HOST = "176.108.249.180"
+    PG_SSH_USER = "pilarovds"
 
     def pg_query(self, sql: str, params=None) -> List[Dict[str, Any]]:
-        """Execute a read-only query via PG wire protocol.
+        """Execute PG query via psycopg3 on the ArcadeDB Linux host.
 
-        Uses a fresh psycopg connection (no pool) for vector search
-        queries (vector.neighbors, vector.fuse). PG handles large
-        inline float arrays correctly, unlike HTTP API.
+        Vector search (vector.neighbors, vector.fuse) requires PG wire
+        protocol. psycopg3 works on Linux (system libpq) but NOT on
+        Windows. We SSH to the host and run Python there.
         """
-        conn = psycopg.connect(
-            host=self._cfg.host, port=self._cfg.port,
-            dbname=self._cfg.database,
-            user=self._cfg.user, password=self._cfg.password,
-            connect_timeout=5, sslmode="disable",
-            autocommit=True, row_factory=dict_row,
+        import subprocess, json as _json
+
+        if params:
+            pg_sql = sql
+            for key, value in params.items():
+                if isinstance(value, list):
+                    repl = _json.dumps([float(x) for x in value])
+                elif isinstance(value, str):
+                    repl = f"'{value}'"
+                elif isinstance(value, (int, float)):
+                    repl = str(value)
+                else:
+                    repl = f"'{value}'"
+                pg_sql = pg_sql.replace(f"%({key})s", repl)
+                pg_sql = pg_sql.replace(f":{key}", repl)
+        else:
+            pg_sql = sql
+
+        script = (
+            "import psycopg, json, sys\n"
+            f"c = psycopg.connect(host='127.0.0.1',port=5432,"
+            f"user='{self._cfg.user}',password='{self._cfg.password}',"
+            f"dbname='{self._cfg.database}',autocommit=True)\n"
+            f"r = c.execute({pg_sql!r})\n"
+            "try:\n"
+            "    desc = [d[0] for d in r.description] if r.description else []\n"
+            "    rows = []\n"
+            "    for row in r.fetchall():\n"
+            "        rows.append(dict(zip(desc, row)) if desc else list(row))\n"
+            "    print(json.dumps(rows))\n"
+            "except Exception:\n"
+            "    print('[]')\n"
+            "c.close()\n"
         )
-        cur = conn.cursor()
         try:
-            cur.execute(sql, params or {})
-            try:
-                if cur.description is not None:
-                    return [dict(r) for r in cur.fetchall()]
-                return []
-            except Exception:
-                return []
-        finally:
-            cur.close()
-            conn.close()
+            result = subprocess.run(
+                ['ssh', '-o', 'ConnectTimeout=5',
+                 f'{self.PG_SSH_USER}@{self.PG_HOST}',
+                 'python3'],
+                input=script, capture_output=True, text=True, timeout=30,
+            )
+            rows = _json.loads(result.stdout.strip())
+            if rows and not isinstance(rows[0], dict):
+                return rows
+            return rows
+        except Exception:
+            logger.debug("pg_query SSH failed", exc_info=True)
+            return []
 
     # ------------------------------------------------------------------
     # Retry helper

@@ -6,7 +6,7 @@ All queries use string formatting (_q helper).
 
 import pytest
 
-pytestmark = pytest.mark.skip_phase2
+pytestmark = pytest.mark.skip_phase3
 
 try:
     from hermes_cli.arcadedb import ArcadeDBConfig, ArcadeDBAdapter, ArcadeDBError
@@ -107,12 +107,13 @@ class TestQueryMethods:
         assert isinstance(rows[0], dict)
 
     def test_query_params(self, arcadedb_adapter):
-        uid = f"qpar-{id(self)}"
+        import uuid
+        uid = f"qpar-{uuid.uuid4().hex[:8]}"
         arcadedb_adapter.execute(
             f"CREATE VERTEX TestQ SET name = {_q(uid)}, age = 42"
         )
         rows = arcadedb_adapter.query(
-            f"SELECT FROM TestQ WHERE age = 42"
+            f"SELECT FROM TestQ WHERE name = {_q(uid)}"
         )
         assert len(rows) == 1
 

@@ -1634,6 +1634,18 @@ DEFAULT_CONFIG = {
             "timeout": 600,
             "extra_body": {},
         },
+        # SearchMatter — CQRS read-model summarization on session end.
+        # Generates a compact summary (<=2000 chars) of the session for
+        # hybrid cross-session search. Uses a sliding window for sessions
+        # exceeding the model's context window. "auto" = main chat model.
+        "search_matter": {
+            "provider": "auto",
+            "model": "",
+            "base_url": "",
+            "api_key": "",
+            "timeout": 60,
+            "extra_body": {},
+        },
         "embedding": {
             "provider": "fastembed",
             "model": "intfloat/multilingual-e5-large",
@@ -2251,6 +2263,35 @@ DEFAULT_CONFIG = {
             "enabled": True,
             "keep": 5,  # retain last N regular snapshots
         },
+    },
+
+    # SearchMatter CQRS — cross-session semantic search.
+    # Populated on end_session() via _create_search_matter().
+    # LLM summarization uses auxiliary.search_matter for provider/model.
+    "search_matter": {
+        "enabled": True,               # Enable SearchMatter CQRS creation
+        "llm_summary": True,           # LLM summarization (False = fallback join)
+        "summary_max_chars": 2000,     # Max length of generated summary
+        # Sliding window for sessions exceeding max_messages.
+        # Chunks overlap by `overlap` messages; recursive combine bounded
+        # by max_recursion depth (prevents infinite loops).
+        "sliding_window": {
+            "max_messages": 50,        # Max messages per LLM summarization chunk
+            "overlap": 5,              # Messages overlapping between adjacent chunks
+            "max_recursion": 3,        # Max depth of recursive combine
+        },
+    },
+
+    # Redis — distributed locking, caching, and pub/sub backend.
+    # Used by RedisLockManager for compression locks (replaces DB-based
+    # CAS which requires REPEATABLE_READ isolation not available in ArcadeDB).
+    # When enabled=False, falls back to DB-based CAS.
+    "redis": {
+        "host": "localhost",
+        "port": 6379,
+        "db": 0,
+        "enabled": True,
+        # password — read from .env REDIS_PASSWORD if set.
     },
 
     # Honcho AI-native memory -- reads ~/.honcho/config.json as single source of truth.

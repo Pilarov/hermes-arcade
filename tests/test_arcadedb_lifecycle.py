@@ -69,7 +69,7 @@ class TestContainerLifecycle:
         cmd_str = " ".join(mock_run.call_args[0][0])
         assert "hermes-arcadedb" in cmd_str
         assert "arcadedb/arcadedb:26.7.1" in cmd_str
-        assert "ARCADEDB_ROOT_PASSWORD=test-pass" in cmd_str
+        assert "-Darcadedb.server.rootPassword=test-pass" in cmd_str
 
     def test_start_already_running(self, monkeypatch):
         """L0-08: start() on running container -> no-op."""

@@ -5666,21 +5666,38 @@ def create_session_db(
     if force_sqlite:
         return SessionDB(db_path, read_only)
 
+    import os as _os
+
     try:
         from hermes_cli.config import load_config
         config = load_config()
         arcadedb_cfg = config.get("database", {}).get("arcadedb", {})
 
+        # Test mode: ARCADEDB_TEST_HOST env var forces ArcadeDB
+        test_host = _os.environ.get("ARCADEDB_TEST_HOST")
+        if test_host and not arcadedb_cfg.get("enabled", False):
+            arcadedb_cfg = {
+                "enabled": True,
+                "host": test_host,
+                "port": int(_os.environ.get("ARCADEDB_TEST_PORT", "5432")),
+                "database": _os.environ.get("ARCADEDB_TEST_DB", "hermes"),
+                "user": _os.environ.get("ARCADEDB_TEST_USER", "root"),
+                "password": _os.environ.get("ARCADEDB_TEST_PASSWORD", ""),
+                "auto_start": False,
+            }
+
         if not arcadedb_cfg.get("enabled", False):
             return SessionDB(db_path, read_only)
 
-        from hermes_cli.arcadedb_lifecycle import ArcadeDBLifecycle
-        lifecycle = ArcadeDBLifecycle.from_config()
+        # Test mode: skip lifecycle when ARCADEDB_TEST_HOST is set
+        if not test_host:
+            from hermes_cli.arcadedb_lifecycle import ArcadeDBLifecycle
+            lifecycle = ArcadeDBLifecycle.from_config()
 
-        if arcadedb_cfg.get("auto_start", True):
-            lifecycle.ensure_started()
-        elif not lifecycle.is_healthy():
-            return SessionDB(db_path, read_only)
+            if arcadedb_cfg.get("auto_start", True):
+                lifecycle.ensure_started()
+            elif not lifecycle.is_healthy():
+                return SessionDB(db_path, read_only)
 
         from hermes_cli.arcadedb import ArcadeDBConfig, ArcadeDBAdapter
         from hermes_cli.arcadedb_session import ArcadedbSessionDB

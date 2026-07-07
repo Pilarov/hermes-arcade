@@ -55,10 +55,13 @@ class TestSessionByTitle:
     """TL-02: get_session_by_title + resolve_session_by_title."""
 
     def test_get_by_title(self, arcadedb_session):
-        sid = f"tl-gbt-{_uid()}"
+        import uuid
+        uid = uuid.uuid4().hex[:8]
+        sid = f"tl-gbt-{uid}"
+        unique_title = f"UT-{uid}"
         arcadedb_session.create_session(sid, source="test")
-        arcadedb_session.set_session_title(sid, "Unique Title")
-        s = arcadedb_session.get_session_by_title("Unique Title")
+        arcadedb_session.set_session_title(sid, unique_title)
+        s = arcadedb_session.get_session_by_title(unique_title)
         assert s is not None and s["id"] == sid
 
     def test_resolve_by_title(self, arcadedb_session):

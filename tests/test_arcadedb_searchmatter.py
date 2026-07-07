@@ -1,7 +1,7 @@
 """Tests for SearchMatter + session_search over ArcadeDB.
 
 Validates:
-  - SearchMatter CQRS read model (manual creation — end_session doesn't wire it)
+  - SearchMatter CQRS — auto-created by end_session()
   - hybrid_search_sessions via pg_query (vector.neighbors + vector.fuse)
   - search_messages via pg_query (vector) + LIKE fallback
   - LIKE fallback with filters (source, role, exclude, CJK)
@@ -11,7 +11,6 @@ Links:
   Fixtures: tests/fixtures/arcadedb_fixtures.py
 """
 
-import json
 import time
 import uuid
 
@@ -21,7 +20,6 @@ pytestmark = pytest.mark.skip_phase3
 
 try:
     from hermes_cli.arcadedb_session import ArcadedbSessionDB
-    from hermes_cli.arcadedb_helpers import _q, _n
     HAS_SESSION = True
 except ImportError:
     HAS_SESSION = False
@@ -29,30 +27,6 @@ except ImportError:
 
 def _uid():
     return uuid.uuid4().hex[:8]
-
-
-def _seed_search_matter(session_db, sid, summary, source="cli", model="test-model"):
-    """Manually create a SearchMatter vertex (end_session doesn't wire this yet)."""
-    from hermes_cli.arcadedb import ArcadeDBAdapter
-
-    session = session_db.get_session(sid)
-    if not session:
-        raise RuntimeError(f"Session {sid} not found")
-    session_rid = session["@rid"]
-
-    emb = session_db._embedder.embed([summary])[0]
-    qv = ArcadeDBAdapter._vec(emb.dense)
-
-    session_db._adapter.execute(
-        f"INSERT INTO SearchMatter SET "
-        f"session_rid = {_q(session_rid)}, "
-        f"summary = {_q(summary)}, "
-        f"keywords = {_q(json.dumps(summary.split()))}, "
-        f"embedding = {qv}, "
-        f"profile = {_q(source)}, "
-        f"model = {_q(model)}, "
-        f"created_at = {_n(time.time())}"
-    )
 
 
 @pytest.mark.skipif(not HAS_SESSION, reason="ArcadedbSessionDB not available")
